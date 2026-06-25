@@ -26,7 +26,7 @@ def list_emails(folder: str = "INBOX", limit: int = 20, unseen_only: bool = Fals
     with get_mailbox() as mailbox:
         mailbox.folder.set(folder)
         messages = []
-        for msg in mailbox.fetch(criteria, limit=limit, reverse=True):
+        for msg in mailbox.fetch(criteria, limit=limit, reverse=True, mark_seen=False):
             messages.append({
                 "uid": msg.uid,
                 "from": msg.from_,
@@ -42,11 +42,10 @@ def read_email(uid: str, folder: str = "INBOX") -> dict:
     """Read a single email by UID. Returns full headers, plain text body, and attachment names."""
     with get_mailbox() as mailbox:
         mailbox.folder.set(folder)
-        msgs = list(mailbox.fetch(AND(uid=uid)))
+        msgs = list(mailbox.fetch(AND(uid=uid), mark_seen=False))
         if not msgs:
             return {"error": f"No email found with uid={uid} in {folder}"}
         msg = msgs[0]
-        mailbox.flag([uid], [MailMessageFlags.SEEN], True)
         return {
             "uid": msg.uid,
             "from": msg.from_,
@@ -61,16 +60,52 @@ def read_email(uid: str, folder: str = "INBOX") -> dict:
 
 
 @mcp.tool()
+def list_folders() -> list[str]:
+    """List all available IMAP folders (e.g., INBOX, INBOX.Drafts, etc.). Use this to find the exact folder name to use for other tools."""
+    with get_mailbox() as mailbox:
+        return [f.name for f in mailbox.folder.list()]
+
+
+@mcp.tool()
+def search_emails(query: str = "", subject: str = "", sender: str = "", folder: str = "INBOX", limit: int = 20) -> list[dict]:
+    """Search emails by free text query, subject, or sender. Returns sender, subject, date, uid."""
+    with get_mailbox() as mailbox:
+        mailbox.folder.set(folder)
+        
+        kwargs = {}
+        if query:
+            kwargs["text"] = query
+        if subject:
+            kwargs["subject"] = subject
+        if sender:
+            kwargs["from_"] = sender
+            
+        criteria = AND(**kwargs) if kwargs else AND(all=True)
+        
+        messages = []
+        for msg in mailbox.fetch(criteria, limit=limit, reverse=True, mark_seen=False):
+            messages.append({
+                "uid": msg.uid,
+                "from": msg.from_,
+                "subject": msg.subject,
+                "date": msg.date.isoformat() if msg.date else None,
+                "seen": MailMessageFlags.SEEN in msg.flags,
+            })
+    return messages
+
+
+@mcp.tool()
 def draft_email(to: str, subject: str, body: str, cc: str = "") -> dict:
-    """Save a draft email to the Drafts folder via SMTP submission is skipped — draft is appended to the Drafts IMAP folder."""
+    """Save a draft email to the Drafts folder. SMTP submission is skipped — draft is appended to the Drafts IMAP folder."""
     import email.utils
     from email.mime.text import MIMEText
-    import imaplib, time
+    import imaplib, time, re
 
     msg = MIMEText(body, "plain", "utf-8")
     msg["From"] = EMAIL_ADDRESS
     msg["To"] = to
-    msg["Cc"] = cc
+    if cc:
+        msg["Cc"] = cc
     msg["Subject"] = subject
     msg["Date"] = email.utils.formatdate(localtime=True)
     msg["Message-ID"] = email.utils.make_msgid()
@@ -80,19 +115,36 @@ def draft_email(to: str, subject: str, body: str, cc: str = "") -> dict:
     imap = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT)
     imap.login(EMAIL_ADDRESS, PASSWORD)
 
-    # Find the Drafts folder name (varies by server)
-    drafts_folder = "Drafts"
-    _, folders = imap.list()
-    for f in folders:
-        decoded = f.decode()
-        if "draft" in decoded.lower():
-            # Extract folder name from the response
-            parts = decoded.split('"/"')
-            if len(parts) > 1:
-                drafts_folder = parts[-1].strip().strip('"')
-            break
+    # Resolve the Drafts folder. Prefer the \Drafts special-use flag,
+    # then fall back to a name match. Parse the folder name as the last
+    # quoted/bare token, regardless of the hierarchy delimiter.
+    def parse_folder_line(line: str):
+        decoded = line.decode() if isinstance(line, bytes) else line
+        m = re.match(r'\((?P<flags>[^)]*)\)\s+(?P<delim>"[^"]*"|NIL)\s+(?P<name>.*)$', decoded)
+        if not m:
+            return "", ""
+        name = m.group("name").strip()
+        if name.startswith('"') and name.endswith('"'):
+            name = name[1:-1]
+        return m.group("flags").lower(), name
 
-    imap.append(drafts_folder, r"\Draft", imaplib.Time2Internaldate(time.time()), raw)
+    drafts_folder = None
+    fallback = None
+    _, folders = imap.list()
+    for f in folders or []:
+        flags, name = parse_folder_line(f)
+        if not name:
+            continue
+        if r"\drafts" in flags:          # special-use flag — most reliable
+            drafts_folder = name
+            break
+        if "draft" in name.lower():      # name-based fallback
+            fallback = name
+
+    drafts_folder = drafts_folder or fallback or "INBOX.Drafts"
+
+    imap.append(drafts_folder, r"(\Draft)",
+                imaplib.Time2Internaldate(time.time()), raw)
     imap.logout()
 
     return {
