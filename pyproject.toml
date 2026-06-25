@@ -1,0 +1,11 @@
+[project]
+name = "mcp-imap"
+version = "0.1.0"
+description = "Email MCP server — IMAP/SMTP bridge for Claude and n8n"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastmcp>=3.3.1",
+    "imap-tools>=1.13.0",
+    "pyyaml>=6.0.3",
+]
