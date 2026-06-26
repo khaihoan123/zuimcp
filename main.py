@@ -4,6 +4,8 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import os
+import re
+import datetime
 
 IMAP_HOST = "mail.sunslifestyle.com"
 IMAP_PORT = 993
@@ -19,22 +21,101 @@ def get_mailbox() -> MailBox:
     return MailBox(IMAP_HOST, IMAP_PORT).login(EMAIL_ADDRESS, PASSWORD)
 
 
-@mcp.tool()
-def list_emails(folder: str = "INBOX", limit: int = 20, unseen_only: bool = False) -> list[dict]:
-    """List emails from a folder. Returns sender, subject, date, uid, and seen status."""
-    criteria = AND(seen=False) if unseen_only else AND(all=True)
+def _snippet(msg, length: int = 200) -> str:
+    """Plain-text preview of a message body, HTML stripped and whitespace collapsed."""
+    text = msg.text or msg.html or ""
+    text = re.sub(r"<[^>]+>", " ", text)      # strip HTML tags
+    text = re.sub(r"\s+", " ", text).strip()  # collapse whitespace
+    return text[:length]
+
+
+def _fetch_messages(folder, criteria, limit=20, offset=0,
+                    with_snippet=False) -> list[dict]:
+    """Shared fetch used by list_emails and search_emails.
+
+    Returns newest-first. Uses UID search to get all matching UIDs, 
+    applies offset and limit to the UIDs, and then fetches only the 
+    needed messages to avoid downloading unnecessary data.
+    """
+    results = []
     with get_mailbox() as mailbox:
         mailbox.folder.set(folder)
-        messages = []
-        for msg in mailbox.fetch(criteria, limit=limit, reverse=True, mark_seen=False):
-            messages.append({
+        
+        criteria_str = str(criteria)
+        if criteria_str == "(ALL)":
+            # O(1) optimization for unfiltered lists: use sequence numbers directly
+            total = mailbox.folder.status(folder)["MESSAGES"]
+            end_seq = total - offset
+            start_seq = max(1, end_seq - limit + 1)
+            
+            if end_seq < 1:
+                selected_uids = []
+            else:
+                uids = mailbox.uids(f"{start_seq}:{end_seq}")
+                uids.reverse()  # newest-first
+                selected_uids = uids
+        else:
+            # For filtered searches, IMAP must evaluate everything and return all UIDs
+            uids = mailbox.uids(criteria)
+            uids.reverse()  # newest-first
+            selected_uids = uids[offset : offset + limit]
+        
+        if not selected_uids:
+            return []
+            
+        # 3. Fetch only the selected UIDs
+        uid_criteria = AND(uid=",".join(selected_uids))
+        fetched = mailbox.fetch(
+            uid_criteria,
+            reverse=True,        # newest first
+            mark_seen=False,
+            bulk=True,
+        )
+        for msg in fetched:
+            item = {
                 "uid": msg.uid,
                 "from": msg.from_,
                 "subject": msg.subject,
                 "date": msg.date.isoformat() if msg.date else None,
                 "seen": MailMessageFlags.SEEN in msg.flags,
-            })
-    return messages
+            }
+            if with_snippet:
+                item["snippet"] = _snippet(msg)
+            results.append(item)
+    return results
+
+
+@mcp.tool()
+def list_emails(folder: str = "INBOX", limit: int = 20, offset: int = 0,
+                unseen_only: bool = False, with_snippet: bool = False,
+                since: str = "", before: str = "") -> list[dict]:
+    """List emails from a folder, newest first.
+
+    Args:
+        folder: IMAP folder name (see list_folders).
+        limit: max messages to return.
+        offset: skip this many of the newest messages, for paging past `limit`
+            (e.g. limit=20, offset=20 returns the next 20).
+        unseen_only: only unread messages.
+        with_snippet: include a ~200 char plain-text body preview. Costs a full
+            body fetch per message, so leave off for plain listing and turn on
+            only when triaging content.
+        since: only messages on/after this date, 'YYYY-MM-DD'.
+        before: only messages strictly before this date, 'YYYY-MM-DD'.
+
+    Returns sender, subject, date, uid, seen status, and (optionally) a snippet.
+    """
+    conditions = {}
+    if unseen_only:
+        conditions["seen"] = False
+    if since:
+        conditions["date_gte"] = datetime.date.fromisoformat(since)
+    if before:
+        conditions["date_lt"] = datetime.date.fromisoformat(before)
+    criteria = AND(**conditions) if conditions else AND(all=True)
+
+    return _fetch_messages(folder, criteria, limit=limit, offset=offset,
+                          with_snippet=with_snippet)
 
 
 @mcp.tool()
@@ -67,39 +148,57 @@ def list_folders() -> list[str]:
 
 
 @mcp.tool()
-def search_emails(query: str = "", subject: str = "", sender: str = "", folder: str = "INBOX", limit: int = 20) -> list[dict]:
-    """Search emails by free text query, subject, or sender. Returns sender, subject, date, uid."""
-    with get_mailbox() as mailbox:
-        mailbox.folder.set(folder)
-        
-        kwargs = {}
-        if query:
-            kwargs["text"] = query
-        if subject:
-            kwargs["subject"] = subject
-        if sender:
-            kwargs["from_"] = sender
-            
-        criteria = AND(**kwargs) if kwargs else AND(all=True)
-        
-        messages = []
-        for msg in mailbox.fetch(criteria, limit=limit, reverse=True, mark_seen=False):
-            messages.append({
-                "uid": msg.uid,
-                "from": msg.from_,
-                "subject": msg.subject,
-                "date": msg.date.isoformat() if msg.date else None,
-                "seen": MailMessageFlags.SEEN in msg.flags,
-            })
-    return messages
+def search_emails(query: str = "", subject: str = "", sender: str = "",
+                  folder: str = "INBOX", limit: int = 20, offset: int = 0,
+                  unseen_only: bool = False, with_snippet: bool = False,
+                  since: str = "", before: str = "") -> list[dict]:
+    """Search emails by free text, subject, or sender, newest first.
+
+    Args:
+        query: free-text search across the message.
+        subject: match within the subject.
+        sender: match the From address.
+        folder, limit, offset, unseen_only, with_snippet, since, before:
+            same meaning as in list_emails.
+
+    Returns sender, subject, date, uid, seen status, and (optionally) a snippet.
+    """
+    kwargs = {}
+    if query:
+        kwargs["text"] = query
+    if subject:
+        kwargs["subject"] = subject
+    if sender:
+        kwargs["from_"] = sender
+    if unseen_only:
+        kwargs["seen"] = False
+    if since:
+        kwargs["date_gte"] = datetime.date.fromisoformat(since)
+    if before:
+        kwargs["date_lt"] = datetime.date.fromisoformat(before)
+    criteria = AND(**kwargs) if kwargs else AND(all=True)
+
+    return _fetch_messages(folder, criteria, limit=limit, offset=offset,
+                          with_snippet=with_snippet)
+
+
+def _resolve_drafts_folder(mailbox) -> str:
+    """Find the Drafts folder via its \\Drafts special-use flag, falling back
+    to a name match, then to INBOX.Drafts."""
+    fallback = None
+    for f in mailbox.folder.list():
+        flags = [fl.lower() for fl in f.flags]
+        if r"\drafts" in flags:        # special-use flag — most reliable
+            return f.name
+        if "draft" in f.name.lower():  # name-based fallback
+            fallback = f.name
+    return fallback or "INBOX.Drafts"
 
 
 @mcp.tool()
 def draft_email(to: str, subject: str, body: str, cc: str = "") -> dict:
     """Save a draft email to the Drafts folder. SMTP submission is skipped — draft is appended to the Drafts IMAP folder."""
     import email.utils
-    from email.mime.text import MIMEText
-    import imaplib, time, re
 
     msg = MIMEText(body, "plain", "utf-8")
     msg["From"] = EMAIL_ADDRESS
@@ -110,42 +209,14 @@ def draft_email(to: str, subject: str, body: str, cc: str = "") -> dict:
     msg["Date"] = email.utils.formatdate(localtime=True)
     msg["Message-ID"] = email.utils.make_msgid()
 
-    raw = msg.as_bytes()
-
-    imap = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT)
-    imap.login(EMAIL_ADDRESS, PASSWORD)
-
-    # Resolve the Drafts folder. Prefer the \Drafts special-use flag,
-    # then fall back to a name match. Parse the folder name as the last
-    # quoted/bare token, regardless of the hierarchy delimiter.
-    def parse_folder_line(line: str):
-        decoded = line.decode() if isinstance(line, bytes) else line
-        m = re.match(r'\((?P<flags>[^)]*)\)\s+(?P<delim>"[^"]*"|NIL)\s+(?P<name>.*)$', decoded)
-        if not m:
-            return "", ""
-        name = m.group("name").strip()
-        if name.startswith('"') and name.endswith('"'):
-            name = name[1:-1]
-        return m.group("flags").lower(), name
-
-    drafts_folder = None
-    fallback = None
-    _, folders = imap.list()
-    for f in folders or []:
-        flags, name = parse_folder_line(f)
-        if not name:
-            continue
-        if r"\drafts" in flags:          # special-use flag — most reliable
-            drafts_folder = name
-            break
-        if "draft" in name.lower():      # name-based fallback
-            fallback = name
-
-    drafts_folder = drafts_folder or fallback or "INBOX.Drafts"
-
-    imap.append(drafts_folder, r"(\Draft)",
-                imaplib.Time2Internaldate(time.time()), raw)
-    imap.logout()
+    with get_mailbox() as mailbox:
+        drafts_folder = _resolve_drafts_folder(mailbox)
+        mailbox.append(
+            msg.as_bytes(),
+            drafts_folder,
+            dt=datetime.datetime.now(),
+            flag_set=[MailMessageFlags.DRAFT],
+        )
 
     return {
         "status": "draft_saved",
