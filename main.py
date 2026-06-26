@@ -6,6 +6,7 @@ from email.mime.multipart import MIMEMultipart
 import os
 import re
 import datetime
+import base64
 
 IMAP_HOST = "mail.sunslifestyle.com"
 IMAP_PORT = 993
@@ -136,8 +137,73 @@ def read_email(uid: str, folder: str = "INBOX") -> dict:
             "date": msg.date.isoformat() if msg.date else None,
             "body_text": msg.text,
             "body_html": msg.html,
-            "attachments": [a.filename for a in msg.attachments],
+            "attachments": [
+                {
+                    "filename": a.filename,
+                    "content_id": a.content_id,
+                    "content_type": a.content_type,
+                    "size": a.size
+                }
+                for a in msg.attachments
+            ],
         }
+
+
+import json
+from mcp.types import ImageContent, TextContent
+
+@mcp.tool()
+def get_attachment(uid: str, folder: str = "INBOX", index: int = -1, content_id: str = ""):
+    """Get an attachment (or all attachments) from an email.
+    Pass `content_id` or `index` to select one attachment.
+    Pass neither to return ALL attachments at once.
+    Images are returned natively so the AI can see them. Non-images return base64 text.
+    """
+    with get_mailbox() as mailbox:
+        mailbox.folder.set(folder)
+        msgs = list(mailbox.fetch(AND(uid=uid), mark_seen=False))
+        if not msgs:
+            return {"error": f"No email found with uid={uid} in {folder}"}
+
+        msg = msgs[0]
+        if not msg.attachments:
+            return {"error": "Email has no attachments"}
+
+        target = None
+        if content_id:
+            for a in msg.attachments:
+                if a.content_id == content_id:
+                    target = a
+                    break
+        elif index >= 0 and index < len(msg.attachments):
+            target = msg.attachments[index]
+
+        if not target and (index >= 0 or content_id):
+            return {"error": f"Attachment not found (index={index}, content_id={content_id})"}
+
+        targets = [target] if target else msg.attachments
+        results = []
+
+        for t in targets:
+            ctype = (t.content_type or "").lower()
+            if ctype.startswith("image/"):
+                results.append(ImageContent(
+                    type="image",
+                    data=base64.b64encode(t.payload).decode("utf-8"),
+                    mimeType=ctype
+                ))
+            else:
+                meta = {
+                    "filename": t.filename,
+                    "content_type": t.content_type,
+                    "content_id": t.content_id,
+                    "size": len(t.payload),
+                    "data_base64": base64.b64encode(t.payload).decode("utf-8"),
+                    "warning": "DO NOT print this base64 data or write it using bash commands."
+                }
+                results.append(TextContent(type="text", text=json.dumps(meta)))
+
+        return results if len(results) > 1 or not target else results[0]
 
 
 @mcp.tool()
@@ -223,6 +289,27 @@ def draft_email(to: str, subject: str, body: str, cc: str = "") -> dict:
         "folder": drafts_folder,
         "to": to,
         "subject": subject,
+    }
+
+@mcp.tool()
+def mark_emails_seen(uids: list[str], folder: str = "INBOX", seen: bool = True) -> dict:
+    """Mark multiple emails as read (seen) or unread.
+
+    Args:
+        uids: A list of email UIDs to modify.
+        folder: The IMAP folder where the emails are located (default: INBOX).
+        seen: True to mark as read, False to mark as unread.
+    """
+    with get_mailbox() as mailbox:
+        mailbox.folder.set(folder)
+        if uids:
+            mailbox.flag(uids, MailMessageFlags.SEEN, seen)
+        
+    return {
+        "status": "success",
+        "uids": uids,
+        "folder": folder,
+        "seen": seen
     }
 
 
