@@ -7,14 +7,24 @@ import os
 import re
 import datetime
 import base64
+from dotenv import load_dotenv
+import yaml
 
-IMAP_HOST = "mail.sunslifestyle.com"
-IMAP_PORT = 993
-SMTP_HOST = "mail.sunslifestyle.com"
-SMTP_PORT = 587
+load_dotenv()
+
+
 EMAIL_ADDRESS = os.environ.get("EMAIL_ADDRESS")
 PASSWORD = os.environ.get("EMAIL_PASSWORD")
+if not EMAIL_ADDRESS or not PASSWORD:
+    raise ValueError("Missing credentials in environment")
 
+config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml")
+with open(config_path, "r") as f:
+    config = yaml.safe_load(f) or {}
+
+IMAP_HOST = config.get("IMAP_HOST")
+IMAP_PORT = config.get("IMAP_PORT")
+    
 mcp = FastMCP("IMAP_Connector")
 
 

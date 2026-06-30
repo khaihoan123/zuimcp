@@ -1,0 +1,4 @@
+IMAP_HOST: "mail.sunslifestyle.com"
+IMAP_PORT: 993
+SMTP_HOST: "mail.sunslifestyle.com"
+SMTP_PORT: 587
