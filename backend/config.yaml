@@ -1,0 +1,7 @@
+IMAP_HOST: "mail.sunslifestyle.com"
+IMAP_PORT: 993
+SMTP_HOST: "mail.sunslifestyle.com"
+SMTP_PORT: 587
+
+AUTH_ISSUER: "https://accounts.google.com"
+AUTH_JWKS_URI: "https://www.googleapis.com/oauth2/v3/certs"

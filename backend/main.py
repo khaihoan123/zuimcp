@@ -1,4 +1,7 @@
-from fastmcp import FastMCP
+from fastapi import FastAPI
+import uvicorn
+from fastmcp import FastMCP, Context
+from fastmcp.server.auth.providers.jwt import JWTVerifier
 from imap_tools import MailBox, AND, MailMessageFlags
 import smtplib
 from email.mime.text import MIMEText
@@ -10,28 +13,68 @@ import base64
 from dotenv import load_dotenv
 import yaml
 
+# 1. Load local env vars (only matters for local testing)
 load_dotenv()
-
-
-EMAIL_ADDRESS = os.environ.get("EMAIL_ADDRESS")
-PASSWORD = os.environ.get("EMAIL_PASSWORD")
-if not EMAIL_ADDRESS or not PASSWORD:
-    raise ValueError("Missing credentials in environment")
+LOCAL_EMAIL = os.environ.get("EMAIL_ADDRESS")
+LOCAL_PASS = os.environ.get("EMAIL_PASSWORD")
 
 config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml")
 with open(config_path, "r") as f:
     config = yaml.safe_load(f) or {}
 
-IMAP_HOST = config.get("IMAP_HOST")
-IMAP_PORT = config.get("IMAP_PORT")
+auth = JWTVerifier(
+    jwks_uri=config.get("AUTH_JWKS_URI", "https://placeholder/.well-known/jwks.json"),
+    issuer=config.get("AUTH_ISSUER", "placeholder"),
+    audience="mcp-imap-server"
+)
     
-mcp = FastMCP("IMAP_Connector")
+mcp = FastMCP("IMAP_Connector", auth=auth)
+
+def _get_user_id(ctx: Context) -> str | None:
+    """Extract user_id from the FastMCP request context if auth is enabled."""
+    if hasattr(ctx, "request_context") and ctx.request_context and hasattr(ctx.request_context, "auth") and ctx.request_context.auth:
+        return ctx.request_context.auth.subject
+    return None
 
 
-def get_mailbox() -> MailBox:
-    return MailBox(IMAP_HOST, IMAP_PORT).login(EMAIL_ADDRESS, PASSWORD)
+def get_mailbox(user_id: str = None) -> MailBox:
+    """Connects via DB if user_id is provided, otherwise falls back to local .env"""
+    imap_host = config.get("IMAP_HOST")
+    imap_port = config.get("IMAP_PORT", 993)
 
+    if user_id:
+        # REMOTE SAAS MODE: Fetch this specific user's credentials from PostgreSQL
+        # user_creds = db.execute("SELECT email, password FROM users WHERE id = %s", (user_id,))
+        # email = user_creds.email
+        # password = user_creds.decrypted_password
+        raise NotImplementedError("SAAS database integration is pending.")
+    else:
+        # LOCAL DEV MODE: Use your personal credentials
+        if not LOCAL_EMAIL or not LOCAL_PASS:
+            raise ValueError("Local credentials missing in .env")
+        email = LOCAL_EMAIL
+        password = LOCAL_PASS
+        
+    return MailBox(imap_host, imap_port).login(email, password)
 
+def get_smtp_client(user_id: str = None) -> smtplib.SMTP:
+    smtp_host = config.get("SMTP_HOST")
+    smtp_port = config.get("SMTP_PORT", 587)
+
+    if user_id:
+        # email = user_creds.email
+        # password = user_creds.decrypted_password
+        raise NotImplementedError("SAAS database integration is pending.")
+    else:
+        email = LOCAL_EMAIL
+        password = LOCAL_PASS
+        
+    client = smtplib.SMTP(smtp_host, smtp_port)
+    client.starttls()
+    client.login(email, password)
+    return client
+
+    
 def _snippet(msg, length: int = 200) -> str:
     """Plain-text preview of a message body, HTML stripped and whitespace collapsed."""
     text = msg.text or msg.html or ""
@@ -40,7 +83,7 @@ def _snippet(msg, length: int = 200) -> str:
     return text[:length]
 
 
-def _fetch_messages(folder, criteria, limit=20, offset=0,
+def _fetch_messages(user_id: str | None, folder: str, criteria, limit=20, offset=0,
                     with_snippet=False) -> list[dict]:
     """Shared fetch used by list_emails and search_emails.
 
@@ -49,7 +92,7 @@ def _fetch_messages(folder, criteria, limit=20, offset=0,
     needed messages to avoid downloading unnecessary data.
     """
     results = []
-    with get_mailbox() as mailbox:
+    with get_mailbox(user_id) as mailbox:
         mailbox.folder.set(folder)
         
         criteria_str = str(criteria)
@@ -97,7 +140,7 @@ def _fetch_messages(folder, criteria, limit=20, offset=0,
 
 
 @mcp.tool()
-def list_emails(folder: str = "INBOX", limit: int = 20, offset: int = 0,
+def list_emails(ctx: Context, folder: str = "INBOX", limit: int = 20, offset: int = 0,
                 unseen_only: bool = False, with_snippet: bool = False,
                 since: str = "", before: str = "") -> list[dict]:
     """List emails from a folder, newest first.
@@ -116,6 +159,7 @@ def list_emails(folder: str = "INBOX", limit: int = 20, offset: int = 0,
 
     Returns sender, subject, date, uid, seen status, and (optionally) a snippet.
     """
+    user_id = _get_user_id(ctx)
     conditions = {}
     if unseen_only:
         conditions["seen"] = False
@@ -125,14 +169,15 @@ def list_emails(folder: str = "INBOX", limit: int = 20, offset: int = 0,
         conditions["date_lt"] = datetime.date.fromisoformat(before)
     criteria = AND(**conditions) if conditions else AND(all=True)
 
-    return _fetch_messages(folder, criteria, limit=limit, offset=offset,
+    return _fetch_messages(user_id, folder, criteria, limit=limit, offset=offset,
                           with_snippet=with_snippet)
 
 
 @mcp.tool()
-def read_email(uid: str, folder: str = "INBOX") -> dict:
+def read_email(ctx: Context, uid: str, folder: str = "INBOX") -> dict:
     """Read a single email by UID. Returns full headers, plain text body, and attachment names."""
-    with get_mailbox() as mailbox:
+    user_id = _get_user_id(ctx)
+    with get_mailbox(user_id) as mailbox:
         mailbox.folder.set(folder)
         msgs = list(mailbox.fetch(AND(uid=uid), mark_seen=False))
         if not msgs:
@@ -163,13 +208,14 @@ import json
 from mcp.types import ImageContent, TextContent
 
 @mcp.tool()
-def get_attachment(uid: str, folder: str = "INBOX", index: int = -1, content_id: str = ""):
+def get_attachment(ctx: Context, uid: str, folder: str = "INBOX", index: int = -1, content_id: str = ""):
     """Get an attachment (or all attachments) from an email.
     Pass `content_id` or `index` to select one attachment.
     Pass neither to return ALL attachments at once.
     Images are returned natively so the AI can see them. Non-images return base64 text.
     """
-    with get_mailbox() as mailbox:
+    user_id = _get_user_id(ctx)
+    with get_mailbox(user_id) as mailbox:
         mailbox.folder.set(folder)
         msgs = list(mailbox.fetch(AND(uid=uid), mark_seen=False))
         if not msgs:
@@ -217,14 +263,15 @@ def get_attachment(uid: str, folder: str = "INBOX", index: int = -1, content_id:
 
 
 @mcp.tool()
-def list_folders() -> list[str]:
+def list_folders(ctx: Context) -> list[str]:
     """List all available IMAP folders (e.g., INBOX, INBOX.Drafts, etc.). Use this to find the exact folder name to use for other tools."""
-    with get_mailbox() as mailbox:
+    user_id = _get_user_id(ctx)
+    with get_mailbox(user_id) as mailbox:
         return [f.name for f in mailbox.folder.list()]
 
 
 @mcp.tool()
-def search_emails(query: str = "", subject: str = "", sender: str = "",
+def search_emails(ctx: Context, query: str = "", subject: str = "", sender: str = "",
                   folder: str = "INBOX", limit: int = 20, offset: int = 0,
                   unseen_only: bool = False, with_snippet: bool = False,
                   since: str = "", before: str = "") -> list[dict]:
@@ -239,6 +286,7 @@ def search_emails(query: str = "", subject: str = "", sender: str = "",
 
     Returns sender, subject, date, uid, seen status, and (optionally) a snippet.
     """
+    user_id = _get_user_id(ctx)
     kwargs = {}
     if query:
         kwargs["text"] = query
@@ -254,7 +302,7 @@ def search_emails(query: str = "", subject: str = "", sender: str = "",
         kwargs["date_lt"] = datetime.date.fromisoformat(before)
     criteria = AND(**kwargs) if kwargs else AND(all=True)
 
-    return _fetch_messages(folder, criteria, limit=limit, offset=offset,
+    return _fetch_messages(user_id, folder, criteria, limit=limit, offset=offset,
                           with_snippet=with_snippet)
 
 
@@ -272,12 +320,13 @@ def _resolve_drafts_folder(mailbox) -> str:
 
 
 @mcp.tool()
-def draft_email(to: str, subject: str, body: str, cc: str = "") -> dict:
+def draft_email(ctx: Context, to: str, subject: str, body: str, cc: str = "") -> dict:
     """Save a draft email to the Drafts folder. SMTP submission is skipped — draft is appended to the Drafts IMAP folder."""
     import email.utils
 
+    user_id = _get_user_id(ctx)
     msg = MIMEText(body, "plain", "utf-8")
-    msg["From"] = EMAIL_ADDRESS
+    msg["From"] = LOCAL_EMAIL
     msg["To"] = to
     if cc:
         msg["Cc"] = cc
@@ -285,12 +334,12 @@ def draft_email(to: str, subject: str, body: str, cc: str = "") -> dict:
     msg["Date"] = email.utils.formatdate(localtime=True)
     msg["Message-ID"] = email.utils.make_msgid()
 
-    with get_mailbox() as mailbox:
+    with get_mailbox(user_id) as mailbox:
         drafts_folder = _resolve_drafts_folder(mailbox)
         mailbox.append(
             msg.as_bytes(),
             drafts_folder,
-            dt=datetime.datetime.now(),
+            dt=datetime.datetime.now(datetime.timezone.utc),
             flag_set=[MailMessageFlags.DRAFT],
         )
 
@@ -302,7 +351,7 @@ def draft_email(to: str, subject: str, body: str, cc: str = "") -> dict:
     }
 
 @mcp.tool()
-def mark_emails_seen(uids: list[str], folder: str = "INBOX", seen: bool = True) -> dict:
+def mark_emails_seen(ctx: Context, uids: list[str], folder: str = "INBOX", seen: bool = True) -> dict:
     """Mark multiple emails as read (seen) or unread.
 
     Args:
@@ -310,7 +359,8 @@ def mark_emails_seen(uids: list[str], folder: str = "INBOX", seen: bool = True) 
         folder: The IMAP folder where the emails are located (default: INBOX).
         seen: True to mark as read, False to mark as unread.
     """
-    with get_mailbox() as mailbox:
+    user_id = _get_user_id(ctx)
+    with get_mailbox(user_id) as mailbox:
         mailbox.folder.set(folder)
         if uids:
             mailbox.flag(uids, MailMessageFlags.SEEN, seen)
@@ -323,8 +373,30 @@ def mark_emails_seen(uids: list[str], folder: str = "INBOX", seen: bool = True) 
     }
 
 
+app = FastAPI()
+
+# 2. Add the OAuth discovery route so Claude knows where to log in
+@app.get("/.well-known/oauth-protected-resource")
+def oauth_discovery():
+    return {
+        # Make sure to replace this with your actual Supabase URL
+        "authorization_server": "https://abcdefgh123456.supabase.co" 
+    }
+
+# 3. Mount the MCP server's SSE app into the FastAPI application at the /mcp path
+app.mount("/mcp", mcp.http_app())
+
+import sys
+
 def main():
-    mcp.run()
+    # If "stdio" is passed as an argument, run the MCP stdio server
+    if len(sys.argv) > 1 and sys.argv[1] == "stdio":
+        # Remove the argument so FastMCP doesn't get confused parsing it
+        sys.argv.pop(1)
+        mcp.run()
+    else:
+        # Otherwise, run the combined FastAPI and MCP application using Uvicorn
+        uvicorn.run(app, host="0.0.0.0", port=8000)
 
 if __name__ == "__main__":
     main()
