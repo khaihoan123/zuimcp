@@ -1,19 +1,31 @@
-from fastapi import FastAPI
+import base64
+import datetime
+import email.utils
+import json
+import os
+import re
+import smtplib
+import sys
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+
 import uvicorn
+import yaml
+from dotenv import load_dotenv
+from fastapi import FastAPI, Depends
+from sqlalchemy.orm import Session
+
 from fastmcp import FastMCP, Context
 from fastmcp.server.auth.providers.jwt import JWTVerifier
 from imap_tools import MailBox, AND, MailMessageFlags
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-import os
-import re
-import datetime
-import base64
-from dotenv import load_dotenv
-import yaml
+from mcp.types import ImageContent, TextContent
 
-# 1. Load local env vars (only matters for local testing)
+import models
+from database import SessionLocal
+
+# ==========================================
+# 1. CONFIGURATION & ENVIRONMENT
+# ==========================================
 load_dotenv()
 LOCAL_EMAIL = os.environ.get("EMAIL_ADDRESS")
 LOCAL_PASS = os.environ.get("EMAIL_PASSWORD")
@@ -22,13 +34,29 @@ config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.y
 with open(config_path, "r") as f:
     config = yaml.safe_load(f) or {}
 
+# ==========================================
+# 2. DATABASE SETUP
+# ==========================================
+def get_db():
+    """Yields a request-scoped database session."""
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+# ==========================================
+# 3. FASTMCP SETUP & AUTH
+# ==========================================
 auth = JWTVerifier(
     jwks_uri=config.get("AUTH_JWKS_URI", "https://placeholder/.well-known/jwks.json"),
     issuer=config.get("AUTH_ISSUER", "placeholder"),
     audience="mcp-imap-server"
 )
-    
+
 mcp = FastMCP("IMAP_Connector", auth=auth)
+
+# --- MCP Helpers ---
 
 def _get_user_id(ctx: Context) -> str | None:
     """Extract user_id from the FastMCP request context if auth is enabled."""
@@ -36,20 +64,14 @@ def _get_user_id(ctx: Context) -> str | None:
         return ctx.request_context.auth.subject
     return None
 
-
 def get_mailbox(user_id: str = None) -> MailBox:
     """Connects via DB if user_id is provided, otherwise falls back to local .env"""
     imap_host = config.get("IMAP_HOST")
     imap_port = config.get("IMAP_PORT", 993)
 
     if user_id:
-        # REMOTE SAAS MODE: Fetch this specific user's credentials from PostgreSQL
-        # user_creds = db.execute("SELECT email, password FROM users WHERE id = %s", (user_id,))
-        # email = user_creds.email
-        # password = user_creds.decrypted_password
         raise NotImplementedError("SAAS database integration is pending.")
     else:
-        # LOCAL DEV MODE: Use your personal credentials
         if not LOCAL_EMAIL or not LOCAL_PASS:
             raise ValueError("Local credentials missing in .env")
         email = LOCAL_EMAIL
@@ -62,8 +84,6 @@ def get_smtp_client(user_id: str = None) -> smtplib.SMTP:
     smtp_port = config.get("SMTP_PORT", 587)
 
     if user_id:
-        # email = user_creds.email
-        # password = user_creds.decrypted_password
         raise NotImplementedError("SAAS database integration is pending.")
     else:
         email = LOCAL_EMAIL
@@ -73,7 +93,6 @@ def get_smtp_client(user_id: str = None) -> smtplib.SMTP:
     client.starttls()
     client.login(email, password)
     return client
-
     
 def _snippet(msg, length: int = 200) -> str:
     """Plain-text preview of a message body, HTML stripped and whitespace collapsed."""
@@ -81,7 +100,6 @@ def _snippet(msg, length: int = 200) -> str:
     text = re.sub(r"<[^>]+>", " ", text)      # strip HTML tags
     text = re.sub(r"\s+", " ", text).strip()  # collapse whitespace
     return text[:length]
-
 
 def _fetch_messages(user_id: str | None, folder: str, criteria, limit=20, offset=0,
                     with_snippet=False) -> list[dict]:
@@ -97,7 +115,6 @@ def _fetch_messages(user_id: str | None, folder: str, criteria, limit=20, offset
         
         criteria_str = str(criteria)
         if criteria_str == "(ALL)":
-            # O(1) optimization for unfiltered lists: use sequence numbers directly
             total = mailbox.folder.status(folder)["MESSAGES"]
             end_seq = total - offset
             start_seq = max(1, end_seq - limit + 1)
@@ -106,22 +123,20 @@ def _fetch_messages(user_id: str | None, folder: str, criteria, limit=20, offset
                 selected_uids = []
             else:
                 uids = mailbox.uids(f"{start_seq}:{end_seq}")
-                uids.reverse()  # newest-first
+                uids.reverse()
                 selected_uids = uids
         else:
-            # For filtered searches, IMAP must evaluate everything and return all UIDs
             uids = mailbox.uids(criteria)
-            uids.reverse()  # newest-first
+            uids.reverse()
             selected_uids = uids[offset : offset + limit]
         
         if not selected_uids:
             return []
             
-        # 3. Fetch only the selected UIDs
         uid_criteria = AND(uid=",".join(selected_uids))
         fetched = mailbox.fetch(
             uid_criteria,
-            reverse=True,        # newest first
+            reverse=True,
             mark_seen=False,
             bulk=True,
         )
@@ -138,6 +153,26 @@ def _fetch_messages(user_id: str | None, folder: str, criteria, limit=20, offset
             results.append(item)
     return results
 
+def _resolve_drafts_folder(mailbox) -> str:
+    """Find the Drafts folder via its \\Drafts special-use flag, falling back
+    to a name match, then to INBOX.Drafts."""
+    fallback = None
+    for f in mailbox.folder.list():
+        flags = [fl.lower() for fl in f.flags]
+        if r"\drafts" in flags:
+            return f.name
+        if "draft" in f.name.lower():
+            fallback = f.name
+    return fallback or "INBOX.Drafts"
+
+# --- MCP Tools ---
+
+@mcp.tool()
+def list_folders(ctx: Context) -> list[str]:
+    """List all available IMAP folders (e.g., INBOX, INBOX.Drafts, etc.). Use this to find the exact folder name to use for other tools."""
+    user_id = _get_user_id(ctx)
+    with get_mailbox(user_id) as mailbox:
+        return [f.name for f in mailbox.folder.list()]
 
 @mcp.tool()
 def list_emails(ctx: Context, folder: str = "INBOX", limit: int = 20, offset: int = 0,
@@ -172,7 +207,6 @@ def list_emails(ctx: Context, folder: str = "INBOX", limit: int = 20, offset: in
     return _fetch_messages(user_id, folder, criteria, limit=limit, offset=offset,
                           with_snippet=with_snippet)
 
-
 @mcp.tool()
 def read_email(ctx: Context, uid: str, folder: str = "INBOX") -> dict:
     """Read a single email by UID. Returns full headers, plain text body, and attachment names."""
@@ -202,10 +236,6 @@ def read_email(ctx: Context, uid: str, folder: str = "INBOX") -> dict:
                 for a in msg.attachments
             ],
         }
-
-
-import json
-from mcp.types import ImageContent, TextContent
 
 @mcp.tool()
 def get_attachment(ctx: Context, uid: str, folder: str = "INBOX", index: int = -1, content_id: str = ""):
@@ -261,15 +291,6 @@ def get_attachment(ctx: Context, uid: str, folder: str = "INBOX", index: int = -
 
         return results if len(results) > 1 or not target else results[0]
 
-
-@mcp.tool()
-def list_folders(ctx: Context) -> list[str]:
-    """List all available IMAP folders (e.g., INBOX, INBOX.Drafts, etc.). Use this to find the exact folder name to use for other tools."""
-    user_id = _get_user_id(ctx)
-    with get_mailbox(user_id) as mailbox:
-        return [f.name for f in mailbox.folder.list()]
-
-
 @mcp.tool()
 def search_emails(ctx: Context, query: str = "", subject: str = "", sender: str = "",
                   folder: str = "INBOX", limit: int = 20, offset: int = 0,
@@ -305,25 +326,9 @@ def search_emails(ctx: Context, query: str = "", subject: str = "", sender: str 
     return _fetch_messages(user_id, folder, criteria, limit=limit, offset=offset,
                           with_snippet=with_snippet)
 
-
-def _resolve_drafts_folder(mailbox) -> str:
-    """Find the Drafts folder via its \\Drafts special-use flag, falling back
-    to a name match, then to INBOX.Drafts."""
-    fallback = None
-    for f in mailbox.folder.list():
-        flags = [fl.lower() for fl in f.flags]
-        if r"\drafts" in flags:        # special-use flag — most reliable
-            return f.name
-        if "draft" in f.name.lower():  # name-based fallback
-            fallback = f.name
-    return fallback or "INBOX.Drafts"
-
-
 @mcp.tool()
 def draft_email(ctx: Context, to: str, subject: str, body: str, cc: str = "") -> dict:
     """Save a draft email to the Drafts folder. SMTP submission is skipped — draft is appended to the Drafts IMAP folder."""
-    import email.utils
-
     user_id = _get_user_id(ctx)
     msg = MIMEText(body, "plain", "utf-8")
     msg["From"] = LOCAL_EMAIL
@@ -372,26 +377,37 @@ def mark_emails_seen(ctx: Context, uids: list[str], folder: str = "INBOX", seen:
         "seen": seen
     }
 
+# ==========================================
+# 4. FASTAPI SETUP
+# ==========================================
+app = FastAPI(title="MCP Platform Backend")
 
-app = FastAPI()
+@app.get("/api/health")
+def health_check():
+    return {"status": "healthy"}
 
-# 2. Add the OAuth discovery route so Claude knows where to log in
+@app.get("/api/users")
+def list_users(db: Session = Depends(get_db)):
+    """Standard REST route for your SvelteKit dashboard."""
+    return db.query(models.User).all()
+
 @app.get("/.well-known/oauth-protected-resource")
 def oauth_discovery():
+    """OAuth discovery route so Claude knows where to log in."""
     return {
         # Make sure to replace this with your actual Supabase URL
         "authorization_server": "https://abcdefgh123456.supabase.co" 
     }
 
-# 3. Mount the MCP server's SSE app into the FastAPI application at the /mcp path
+# Mount the MCP server's SSE app into the FastAPI application at the /mcp path
 app.mount("/mcp", mcp.http_app())
 
-import sys
-
+# ==========================================
+# 5. MAIN EXECUTION
+# ==========================================
 def main():
     # If "stdio" is passed as an argument, run the MCP stdio server
     if len(sys.argv) > 1 and sys.argv[1] == "stdio":
-        # Remove the argument so FastMCP doesn't get confused parsing it
         sys.argv.pop(1)
         mcp.run()
     else:

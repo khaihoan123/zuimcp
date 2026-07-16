@@ -16,5 +16,13 @@ export default defineConfig({
 			// See https://svelte.dev/docs/kit/adapters for more information about adapters.
 			adapter: adapter()
 		})
-	]
+	],
+	server: {
+		proxy: {
+			'/api': {
+				target: 'http://127.0.0.1:8000',
+				changeOrigin: true
+			}
+		}
+	}
 });
