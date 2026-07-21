@@ -1,9 +1,17 @@
 import adapter from '@sveltejs/adapter-auto';
 import { sveltekit } from '@sveltejs/kit/vite';
-import { defineConfig } from 'vite';
+import { defineConfig, loadEnv } from 'vite';
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
 	plugins: [
+		// Expose non-VITE_ vars from .env (DATABASE_URL, BETTER_AUTH_*) to
+		// server-side code via process.env; production reads the real environment.
+		{
+			name: 'load-server-env',
+			config() {
+				Object.assign(process.env, loadEnv(mode, process.cwd(), ''));
+			}
+		},
 		sveltekit({
 			compilerOptions: {
 				// Force runes mode for the project, except for libraries. Can be removed in svelte 6.
@@ -25,4 +33,4 @@ export default defineConfig({
 			}
 		}
 	}
-});
+}));

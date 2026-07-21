@@ -7,6 +7,9 @@
 			"path": "../../../AppData/Local/Packages/Claude_pzs8sxrjxfjjc/LocalCache/Roaming/Claude"
 		}
 	],
+	"settings": {
+		"typescript.preferGoToSourceDefinition": true
+	},
 	// "settings": {
 	// 	"python.defaultInterpreterPath": "./backend/.venv/Scripts/python.exe"
 	// }

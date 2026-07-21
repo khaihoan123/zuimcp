@@ -15,9 +15,15 @@
 		"@sveltejs/adapter-auto": "^7.0.1",
 		"@sveltejs/kit": "^2.63.0",
 		"@sveltejs/vite-plugin-svelte": "^7.1.2",
+		"@types/pg": "^8.20.0",
 		"svelte": "^5.56.1",
 		"svelte-check": "^4.6.0",
 		"typescript": "^6.0.3",
 		"vite": "^8.0.16"
+	},
+	"dependencies": {
+		"@better-auth/oauth-provider": "^1.6.23",
+		"better-auth": "^1.6.23",
+		"pg": "^8.22.0"
 	}
 }
