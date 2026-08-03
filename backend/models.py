@@ -1,11 +1,73 @@
-from sqlalchemy.orm import Mapped, mapped_column
-from sqlalchemy import String, Text
+import datetime
+
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    ForeignKey,
+    String,
+    Table,
+    UniqueConstraint,
+    func,
+)
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
 from database import Base
 
-class User(Base):
-    __tablename__ = "users"
+# Minimal stub for Better Auth's "user" table — just enough for SQLAlchemy to
+# resolve ForeignKey("user.id") when sorting/generating DDL. Better Auth owns
+# this table's real schema and migrations; alembic/env.py's include_object
+# hook excludes it by name so Alembic never tries to create/alter/drop it.
+Table("user", Base.metadata, Column("id", String(255), primary_key=True))
 
-    id: Mapped[int] = mapped_column(primary_key=True, index=True)
-    email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
-    google_access_token: Mapped[str] = mapped_column(Text)
-    google_refresh_token: Mapped[str] = mapped_column(Text)
+
+class Connection(Base):
+    """A user's connection to an external service (mailbox, Odoo, etc.).
+
+    user_id references Better Auth's "user" table, which this codebase does
+    not model directly — Better Auth owns that table's schema and migrations.
+    """
+
+    __tablename__ = "connections"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        String(255), ForeignKey("user.id", ondelete="CASCADE"), index=True
+    )
+    service_type: Mapped[str] = mapped_column(String(50))
+    display_name: Mapped[str] = mapped_column(String(255))
+    # Fernet-encrypted JSON blob (access/refresh tokens, IMAP password, etc.)
+    # — never stored in plaintext. See core/security.py for encrypt/decrypt.
+    credentials_encrypted: Mapped[str] = mapped_column(String)
+    status: Mapped[str] = mapped_column(String(20), default="active")
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    last_used_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    permissions: Mapped[list["Permission"]] = relationship(
+        back_populates="connection", cascade="all, delete-orphan"
+    )
+
+
+class Permission(Base):
+    """A single capability toggle for a connection, e.g. ("email.send", True).
+
+    Capabilities are namespaced free-text strings, not an enum, so new
+    services (Odoo, etc.) can introduce their own capabilities without a
+    migration.
+    """
+
+    __tablename__ = "permissions"
+    __table_args__ = (UniqueConstraint("connection_id", "capability"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    connection_id: Mapped[int] = mapped_column(
+        ForeignKey("connections.id", ondelete="CASCADE"), index=True
+    )
+    capability: Mapped[str] = mapped_column(String(100))
+    allowed: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    connection: Mapped["Connection"] = relationship(back_populates="permissions")

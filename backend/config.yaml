@@ -3,5 +3,12 @@ IMAP_PORT: 993
 SMTP_HOST: "mail.sunslifestyle.com"
 SMTP_PORT: 587
 
-AUTH_ISSUER: "https://accounts.google.com"
-AUTH_JWKS_URI: "https://www.googleapis.com/oauth2/v3/certs"
+# Better Auth (SvelteKit) is the OAuth 2.1 authorization server. This app is
+# the resource server: it verifies tokens Better Auth issued, it does not
+# issue or manage identity itself.
+AUTH_ISSUER: "http://localhost:5173/auth"
+AUTH_JWKS_URI: "http://localhost:5173/auth/jwks"
+# Bare origin of this server — NOT the resource identifier (see main.py's
+# RESOURCE_INDICATOR, which appends MCP_PATH and must match
+# MCP_RESOURCE_INDICATOR in frontend/.env).
+MCP_RESOURCE_URL: "http://localhost:8000"

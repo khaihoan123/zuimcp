@@ -11,7 +11,11 @@
 	async function decide(accept: boolean) {
 		error = '';
 		loading = true;
-		const { data, error: err } = await authClient.oauth2.consent({ accept });
+		// The server verifies this signed query string (sig/exp params from
+		// the /oauth2/authorize redirect) to recover which authorization
+		// request this consent belongs to — it isn't tracked any other way.
+		const oauth_query = page.url.search.slice(1);
+		const { data, error: err } = await authClient.oauth2.consent({ accept, oauth_query });
 		loading = false;
 		if (err) {
 			error = err.message ?? 'Something went wrong';

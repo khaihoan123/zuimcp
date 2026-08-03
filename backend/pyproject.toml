@@ -5,6 +5,8 @@ description = "Email MCP server — IMAP/SMTP bridge for Claude and n8n"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "alembic>=1.18.5",
+    "cryptography>=48.0.0",
     "fastapi[standard]>=0.139.0",
     "fastmcp>=3.3.1",
     "imap-tools>=1.13.0",

@@ -12,15 +12,14 @@ from email.mime.text import MIMEText
 import uvicorn
 import yaml
 from dotenv import load_dotenv
-from fastapi import FastAPI, Depends
-from sqlalchemy.orm import Session
+from fastapi import FastAPI
 
 from fastmcp import FastMCP, Context
+from fastmcp.server.auth import RemoteAuthProvider
 from fastmcp.server.auth.providers.jwt import JWTVerifier
 from imap_tools import MailBox, AND, MailMessageFlags
 from mcp.types import ImageContent, TextContent
 
-import models
 from database import SessionLocal
 
 # ==========================================
@@ -48,10 +47,37 @@ def get_db():
 # ==========================================
 # 3. FASTMCP SETUP & AUTH
 # ==========================================
-auth = JWTVerifier(
-    jwks_uri=config.get("AUTH_JWKS_URI", "https://placeholder/.well-known/jwks.json"),
-    issuer=config.get("AUTH_ISSUER", "placeholder"),
-    audience="mcp-imap-server"
+# Better Auth (SvelteKit) is the OAuth 2.1 authorization server; this app is
+# only a resource server. It verifies tokens Better Auth issued — it never
+# issues or manages identity itself.
+MCP_PATH = "/mcp"
+MCP_RESOURCE_URL = config.get("MCP_RESOURCE_URL", "http://localhost:8000")
+BETTER_AUTH_ISSUER = config.get("AUTH_ISSUER")
+
+# The full protected-resource identifier (RFC 8707/9728) — what an MCP
+# client sends as its "resource" param and gets back as the token's `aud`
+# claim. Must exactly equal validAudiences in frontend/src/lib/server/auth.ts,
+# or Better Auth rejects the token request ("requested resource invalid") —
+# or worse, silently issues an opaque non-JWT access_token instead.
+RESOURCE_INDICATOR = MCP_RESOURCE_URL.rstrip("/") + MCP_PATH
+
+token_verifier = JWTVerifier(
+    jwks_uri=config.get("AUTH_JWKS_URI"),
+    issuer=BETTER_AUTH_ISSUER,
+    audience=RESOURCE_INDICATOR,
+    # Must match jwt({jwks: {keyPairConfig: {alg: 'RS256'}}}) in
+    # frontend/src/lib/server/auth.ts — FastMCP's JWTVerifier does not
+    # support Better Auth's default EdDSA signing algorithm.
+    algorithm="RS256",
+)
+
+# Wraps the verifier with knowledge of *which* server issues valid tokens,
+# so FastMCP can auto-serve /.well-known/oauth-protected-resource pointing
+# agents at Better Auth — replacing the old hardcoded placeholder route.
+auth = RemoteAuthProvider(
+    token_verifier=token_verifier,
+    authorization_servers=[BETTER_AUTH_ISSUER],
+    base_url=MCP_RESOURCE_URL,
 )
 
 mcp = FastMCP("IMAP_Connector", auth=auth)
@@ -59,9 +85,9 @@ mcp = FastMCP("IMAP_Connector", auth=auth)
 # --- MCP Helpers ---
 
 def _get_user_id(ctx: Context) -> str | None:
-    """Extract user_id from the FastMCP request context if auth is enabled."""
+    """Extract the Better Auth user id (JWT `sub` claim) from the request context."""
     if hasattr(ctx, "request_context") and ctx.request_context and hasattr(ctx.request_context, "auth") and ctx.request_context.auth:
-        return ctx.request_context.auth.subject
+        return ctx.request_context.auth.claims.get("sub")
     return None
 
 def get_mailbox(user_id: str = None) -> MailBox:
@@ -380,27 +406,29 @@ def mark_emails_seen(ctx: Context, uids: list[str], folder: str = "INBOX", seen:
 # ==========================================
 # 4. FASTAPI SETUP
 # ==========================================
-app = FastAPI(title="MCP Platform Backend")
+# The internal http_app path and the mcp_path given to get_well_known_routes
+# must be the SAME value ("/mcp") — FastMCP computes its own copy of the
+# protected-resource metadata URL (used in the 401 WWW-Authenticate header)
+# from whatever path is passed to http_app(), independently of the routes
+# we register below. Mismatching the two produces a 401 challenge that
+# points at a URL nothing actually serves. Mounting the resulting app at
+# the true root ("/", no extra prefix) means "/mcp" is both the internal
+# and the final external path — no double-prefixing. MCP_PATH is defined in
+# section 3 above, alongside RESOURCE_INDICATOR which depends on it.
+mcp_app = mcp.http_app(path=MCP_PATH)
+well_known_routes = auth.get_well_known_routes(mcp_path=MCP_PATH)
+
+# lifespan=mcp_app.lifespan is required for FastMCP's streamable-http
+# transport to start its session manager; omitting it breaks /mcp at
+# request time even though the app appears to start fine.
+app = FastAPI(title="MCP Platform Backend", lifespan=mcp_app.lifespan)
+app.router.routes.extend(well_known_routes)
 
 @app.get("/api/health")
 def health_check():
     return {"status": "healthy"}
 
-@app.get("/api/users")
-def list_users(db: Session = Depends(get_db)):
-    """Standard REST route for your SvelteKit dashboard."""
-    return db.query(models.User).all()
-
-@app.get("/.well-known/oauth-protected-resource")
-def oauth_discovery():
-    """OAuth discovery route so Claude knows where to log in."""
-    return {
-        # Make sure to replace this with your actual Supabase URL
-        "authorization_server": "https://abcdefgh123456.supabase.co" 
-    }
-
-# Mount the MCP server's SSE app into the FastAPI application at the /mcp path
-app.mount("/mcp", mcp.http_app())
+app.mount("/", mcp_app)
 
 # ==========================================
 # 5. MAIN EXECUTION

@@ -29,7 +29,13 @@ export const auth = betterAuth({
 	plugins: [
 		// Signs OAuth access tokens and publishes real keys at /auth/jwks —
 		// this is what lets the FastAPI resource server verify tokens.
-		jwt(),
+		// RS256 instead of the EdDSA default: FastMCP's JWTVerifier (used on
+		// the FastAPI side) only supports RS/ES/PS/HS families, not EdDSA.
+		jwt({
+			jwks: {
+				keyPairConfig: { alg: 'RS256', modulusLength: 2048 }
+			}
+		}),
 		// OAuth 2.1 authorization server (successor to the deprecated mcp
 		// plugin): /oauth2/authorize, /oauth2/token, dynamic client
 		// registration, PKCE. MCP clients (Claude, etc.) authorize against
@@ -38,8 +44,13 @@ export const auth = betterAuth({
 			loginPage: '/login',
 			consentPage: '/consent',
 			allowDynamicClientRegistration: true,
-			// Audience the FastAPI MCP resource server expects in tokens.
-			validAudiences: [process.env.MCP_RESOURCE_URL ?? 'http://localhost:8000'],
+			// Must exactly equal the "resource" value an MCP client requests
+			// (RFC 8707), which is the full protected-resource identifier —
+			// i.e. FastAPI's base URL + its /mcp path, NOT the bare origin.
+			// Mismatch here fails token exchange with "requested resource
+			// invalid" and silently falls back to an opaque (non-JWT)
+			// access_token instead of erroring, which is easy to miss.
+			validAudiences: [process.env.MCP_RESOURCE_INDICATOR ?? 'http://localhost:8000/mcp'],
 			scopes: ['openid', 'profile', 'email', 'offline_access']
 		})
 	]
