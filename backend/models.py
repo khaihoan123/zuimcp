@@ -12,12 +12,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from database import Base
+from core.db import Base
 
-# Minimal stub for Better Auth's "user" table — just enough for SQLAlchemy to
-# resolve ForeignKey("user.id") when sorting/generating DDL. Better Auth owns
-# this table's real schema and migrations; alembic/env.py's include_object
-# hook excludes it by name so Alembic never tries to create/alter/drop it.
 Table("user", Base.metadata, Column("id", String(255), primary_key=True))
 
 

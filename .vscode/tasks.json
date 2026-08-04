@@ -1,0 +1,39 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "backend: dev",
+			"type": "shell",
+			"command": "uv run --directory backend uvicorn main:app --reload --port 8000",
+			"isBackground": true,
+			"problemMatcher": [],
+			"presentation": {
+				"panel": "dedicated",
+				"group": "dev",
+				"clear": true
+			}
+		},
+		{
+			"label": "frontend: dev",
+			"type": "shell",
+			"command": "npm run dev --prefix frontend",
+			"isBackground": true,
+			"problemMatcher": [],
+			"presentation": {
+				"panel": "dedicated",
+				"group": "dev",
+				"clear": true
+			}
+		},
+		{
+			"label": "dev: run all",
+			"dependsOn": ["backend: dev", "frontend: dev"],
+			"dependsOrder": "parallel",
+			"problemMatcher": [],
+			"group": {
+				"kind": "build",
+				"isDefault": true
+			}
+		}
+	]
+}

@@ -7,7 +7,7 @@ from sqlalchemy import engine_from_config, pool
 from alembic import context
 
 import models  # noqa: F401 — populates Base.metadata with our tables
-from database import Base
+from core.db import Base
 
 load_dotenv()
 
