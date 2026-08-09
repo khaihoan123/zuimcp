@@ -1,33 +1,22 @@
 <script lang="ts">
-	import { goto } from '$app/navigation';
-	import { invalidateAll } from '$app/navigation';
-	import { authClient } from '$lib/auth-client';
+	import { Button } from '$lib/components/ui/button';
 
 	let { data } = $props();
-
-	async function signOut() {
-		await authClient.signOut();
-		await invalidateAll();
-		goto('/login');
-	}
 </script>
 
-<main>
-	<h1>MCP Platform</h1>
-
+<main class="mx-auto max-w-xl px-6 py-16 text-center">
 	{#if data.user}
-		<p>Signed in as <strong>{data.user.email}</strong> ({data.user.name})</p>
-		<button onclick={signOut}>Sign out</button>
+		<h1 class="mb-2 text-3xl font-semibold">Welcome back</h1>
+		<p class="mb-8 text-muted-foreground">Manage the accounts your AI agent can access.</p>
+		<Button href="/connections" size="lg">Go to Connections →</Button>
 	{:else}
-		<p>You are not signed in.</p>
-		<p><a href="/login">Sign in</a> or <a href="/signup">create an account</a></p>
+		<h1 class="mb-2 text-3xl font-semibold">MCP Platform</h1>
+		<p class="mb-8 text-muted-foreground">
+			Connect your email accounts and control exactly what your AI agent can do with them.
+		</p>
+		<div class="flex items-center justify-center gap-5">
+			<Button href="/signup" size="lg">Get started</Button>
+			<a class="text-muted-foreground hover:text-foreground" href="/login">Sign in</a>
+		</div>
 	{/if}
 </main>
-
-<style>
-	main {
-		max-width: 32rem;
-		margin: 4rem auto;
-		font-family: system-ui, sans-serif;
-	}
-</style>

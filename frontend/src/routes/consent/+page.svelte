@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { authClient } from '$lib/auth-client';
+	import { Button } from '$lib/components/ui/button';
+	import * as Card from '$lib/components/ui/card';
 
 	const clientId = page.url.searchParams.get('client_id') ?? '';
 	const scopes = (page.url.searchParams.get('scope') ?? '').split(' ').filter(Boolean);
@@ -28,43 +30,33 @@
 	}
 </script>
 
-<main>
-	<h1>Authorize access</h1>
-	<p>
-		An application {#if clientId}(client <code>{clientId}</code>){/if} is requesting access to your
-		account.
-	</p>
-	{#if scopes.length}
-		<p>Requested scopes:</p>
-		<ul>
-			{#each scopes as scope}
-				<li><code>{scope}</code></li>
-			{/each}
-		</ul>
-	{/if}
-	{#if error}
-		<p class="error">{error}</p>
-	{/if}
-	<div class="actions">
-		<button onclick={() => decide(true)} disabled={loading}>Allow</button>
-		<button class="secondary" onclick={() => decide(false)} disabled={loading}>Deny</button>
-	</div>
+<main class="flex min-h-[calc(100vh-4rem)] items-center justify-center p-6">
+	<Card.Root class="w-full max-w-md">
+		<Card.Header>
+			<Card.Title class="text-xl">Authorize access</Card.Title>
+		</Card.Header>
+		<Card.Content class="flex flex-col gap-4">
+			<p class="text-muted-foreground">
+				An application {#if clientId}(client <code>{clientId}</code>){/if} is requesting access to
+				your account.
+			</p>
+			{#if scopes.length}
+				<div>
+					<p class="mb-1 text-muted-foreground">Requested scopes:</p>
+					<ul class="list-disc pl-5">
+						{#each scopes as scope}
+							<li><code>{scope}</code></li>
+						{/each}
+					</ul>
+				</div>
+			{/if}
+			{#if error}
+				<p class="text-sm text-destructive">{error}</p>
+			{/if}
+			<div class="flex gap-3">
+				<Button onclick={() => decide(true)} disabled={loading}>Allow</Button>
+				<Button variant="secondary" onclick={() => decide(false)} disabled={loading}>Deny</Button>
+			</div>
+		</Card.Content>
+	</Card.Root>
 </main>
-
-<style>
-	main {
-		max-width: 26rem;
-		margin: 4rem auto;
-		font-family: system-ui, sans-serif;
-	}
-	.actions {
-		display: flex;
-		gap: 0.75rem;
-	}
-	.secondary {
-		background: transparent;
-	}
-	.error {
-		color: #b00020;
-	}
-</style>
