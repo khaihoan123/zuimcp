@@ -43,6 +43,18 @@ docker compose --profile migrate run --rm backend-migrate
 docker compose up -d --build
 ```
 
+## Social sign-in (optional)
+
+Leave `GOOGLE_CLIENT_ID`/`GITHUB_CLIENT_ID` blank in `.env` to skip a
+provider — email/password keeps working regardless. To enable one, register
+an OAuth app and set its redirect URI to
+`https://<APP_DOMAIN>/auth/callback/<provider>`:
+
+- **Google** — [console.cloud.google.com/apis/credentials](https://console.cloud.google.com/apis/credentials),
+  create an OAuth client ID (Web application).
+- **GitHub** — [github.com/settings/developers](https://github.com/settings/developers),
+  a new **OAuth App** (not a GitHub App).
+
 ## Notes
 
 - `CREDENTIALS_ENCRYPTION_KEY` has no rotation support (`core/security.py`).

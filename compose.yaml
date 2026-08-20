@@ -69,6 +69,13 @@ services:
       # reverse proxy; without it POSTs fail CSRF checks.
       ORIGIN: https://${APP_DOMAIN}
       PORT: 3000
+      # Social sign-in. Each provider only activates in auth.ts if both its
+      # vars are non-empty, so leaving these unset in .env is fine — email/
+      # password sign-in keeps working on its own.
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
     depends_on:
       db:
         condition: service_healthy

@@ -13,6 +13,25 @@ if (!connectionString) {
 
 const baseURL = process.env.BETTER_AUTH_URL ?? 'http://localhost:5173';
 
+// Each provider is only registered if both its env vars are set, so a dev
+// box without Google/GitHub OAuth apps configured still gets working
+// email/password auth instead of Better Auth throwing on a blank secret.
+// Redirect URI to register with each provider's console:
+// {BETTER_AUTH_URL}/auth/callback/google (or /github).
+const socialProviders: NonNullable<Parameters<typeof betterAuth>[0]['socialProviders']> = {};
+if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
+	socialProviders.google = {
+		clientId: process.env.GOOGLE_CLIENT_ID,
+		clientSecret: process.env.GOOGLE_CLIENT_SECRET
+	};
+}
+if (process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET) {
+	socialProviders.github = {
+		clientId: process.env.GITHUB_CLIENT_ID,
+		clientSecret: process.env.GITHUB_CLIENT_SECRET
+	};
+}
+
 export const auth = betterAuth({
 	baseURL,
 	// Default is /api/auth, but the Vite proxy sends /api/* to FastAPI,
@@ -23,6 +42,11 @@ export const auth = betterAuth({
 	emailAndPassword: {
 		enabled: true
 	},
+	// Sign-in via Google/GitHub (Better Auth acting as an OAuth *client*) —
+	// distinct from the oauthProvider plugin below, where Better Auth is the
+	// OAuth *server* that MCP clients authorize against. Unrelated flows,
+	// same library.
+	socialProviders,
 	// The jwt plugin's own /token path is superseded by the OAuth 2.1
 	// token endpoint at /oauth2/token.
 	disabledPaths: ['/token'],
