@@ -30,7 +30,7 @@
 	}
 </script>
 
-<main class="flex min-h-[calc(100vh-4rem)] items-center justify-center p-6">
+<main class="flex min-h-screen items-center justify-center p-6">
 	<Card.Root class="w-full max-w-md">
 		<Card.Header>
 			<Card.Title class="text-xl">Authorize access</Card.Title>

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { goto, invalidateAll } from '$app/navigation';
 	import { authClient } from '$lib/auth-client';
+	import ArrowLeftIcon from '@lucide/svelte/icons/arrow-left';
 	import { Button } from '$lib/components/ui/button';
 	import * as Card from '$lib/components/ui/card';
 	import { Input } from '$lib/components/ui/input';
@@ -22,11 +23,19 @@
 			return;
 		}
 		await invalidateAll();
-		goto('/');
+		goto('/dashboard');
 	}
 </script>
 
-<main class="flex min-h-[calc(100vh-4rem)] items-center justify-center p-6">
+<main class="flex min-h-screen flex-col items-center justify-center gap-6 p-6">
+	<a
+		class="flex items-center gap-2 text-sm text-muted-foreground transition-colors hover:text-foreground"
+		href="/"
+	>
+		<ArrowLeftIcon class="size-4" />
+		Back to home
+	</a>
+
 	<Card.Root class="w-full max-w-sm">
 		<Card.Header>
 			<Card.Title class="text-center text-xl">Sign in</Card.Title>

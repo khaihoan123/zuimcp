@@ -1,0 +1,127 @@
+name: mcp-platform
+
+# Only caddy publishes ports. db, backend and frontend are reachable on the
+# internal network alone, so Postgres is never exposed to the internet.
+networks:
+  internal:
+
+volumes:
+  db-data:
+  caddy-data:
+  caddy-config:
+
+x-db-url: &db-url
+  DATABASE_URL: postgresql://${POSTGRES_USER:-mcp}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-mcp}
+
+services:
+  db:
+    image: postgres:17-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-mcp}
+      POSTGRES_USER: ${POSTGRES_USER:-mcp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mcp} -d ${POSTGRES_DB:-mcp}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    networks: [internal]
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    environment:
+      <<: *db-url
+      CREDENTIALS_ENCRYPTION_KEY: ${CREDENTIALS_ENCRYPTION_KEY:?set CREDENTIALS_ENCRYPTION_KEY in .env}
+      # Overrides config.yaml's localhost defaults. AUTH_ISSUER must equal the
+      # `iss` claim Better Auth puts in its tokens, i.e. BETTER_AUTH_URL + /auth.
+      AUTH_ISSUER: https://${APP_DOMAIN:?set APP_DOMAIN in .env}/auth
+      AUTH_JWKS_URI: https://${APP_DOMAIN}/auth/jwks
+      # Bare origin. service.py appends MCP_PATH to build RESOURCE_INDICATOR.
+      MCP_RESOURCE_URL: https://${MCP_DOMAIN:?set MCP_DOMAIN in .env}
+      IMAP_HOST: ${IMAP_HOST:-mail.sunslifestyle.com}
+      IMAP_PORT: ${IMAP_PORT:-993}
+      SMTP_HOST: ${SMTP_HOST:-mail.sunslifestyle.com}
+      SMTP_PORT: ${SMTP_PORT:-587}
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [internal]
+
+  frontend:
+    build:
+      context: ./frontend
+      target: runtime
+    restart: unless-stopped
+    environment:
+      <<: *db-url
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?set BETTER_AUTH_SECRET in .env}
+      BETTER_AUTH_URL: https://${APP_DOMAIN}
+      # Must byte-for-byte equal the backend's RESOURCE_INDICATOR
+      # (MCP_RESOURCE_URL + MCP_PATH). Both are derived from MCP_DOMAIN here so
+      # they cannot drift — a mismatch silently downgrades access tokens from
+      # JWT to opaque instead of erroring.
+      MCP_RESOURCE_INDICATOR: https://${MCP_DOMAIN}/mcp/email
+      # adapter-node needs the public origin to validate form actions behind a
+      # reverse proxy; without it POSTs fail CSRF checks.
+      ORIGIN: https://${APP_DOMAIN}
+      PORT: 3000
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [internal]
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN}
+      MCP_DOMAIN: ${MCP_DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on: [frontend, backend]
+    networks: [internal]
+
+  # --- one-shot migrations (profile: migrate) --------------------------------
+  # Order matters: Better Auth creates the `user` table, and the Python
+  # `connections` table has a foreign key to user.id. Run auth-migrate first.
+
+  # Uses the build stage because the Better Auth CLI needs devDependencies and
+  # the TypeScript source to load auth.ts.
+  auth-migrate:
+    profiles: [migrate]
+    build:
+      context: ./frontend
+      target: build
+    environment:
+      <<: *db-url
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
+      BETTER_AUTH_URL: https://${APP_DOMAIN}
+      MCP_RESOURCE_INDICATOR: https://${MCP_DOMAIN}/mcp/email
+    command: ["npx", "@better-auth/cli", "migrate", "--y"]
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [internal]
+
+  backend-migrate:
+    profiles: [migrate]
+    build: ./backend
+    environment:
+      <<: *db-url
+      CREDENTIALS_ENCRYPTION_KEY: ${CREDENTIALS_ENCRYPTION_KEY}
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [internal]

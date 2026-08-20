@@ -1,4 +1,7 @@
 @import 'tailwindcss';
+/* Provides the animate-in / fade-in-0 / zoom-in-95 utilities that the shadcn
+   dropdown-menu and dialog components reference. */
+@import 'tw-animate-css';
 
 :root {
 	--radius: 0.625rem;

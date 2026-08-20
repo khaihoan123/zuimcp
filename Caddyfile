@@ -1,0 +1,26 @@
+{
+	email {$ACME_EMAIL}
+}
+
+# Dashboard, marketing site, and the Better Auth OAuth server. The OAuth
+# discovery documents (/.well-known/oauth-authorization-server/auth) are served
+# by SvelteKit at this domain's root, so nothing here may sit under a path
+# prefix.
+{$APP_DOMAIN} {
+	# The browser fetches /api/* relative to this origin. Vite's dev proxy does
+	# this in development; Caddy has to do the same job in production.
+	handle /api/* {
+		reverse_proxy backend:8000
+	}
+
+	handle {
+		reverse_proxy frontend:3000
+	}
+}
+
+# Resource server: /mcp/email plus its protected-resource metadata. Kept on its
+# own domain so both live at the root path, matching what FastMCP computes
+# internally from MCP_PATH.
+{$MCP_DOMAIN} {
+	reverse_proxy backend:8000
+}
