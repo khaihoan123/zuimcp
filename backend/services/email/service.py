@@ -11,8 +11,9 @@ from fastmcp.server.auth.providers.jwt import JWTVerifier
 from imap_tools import AND, MailMessageFlags
 from mcp.types import ImageContent, TextContent
 
-from core.config import LOCAL_EMAIL, config
+from core.config import config
 from services.email.providers.imap import get_mailbox, get_connected_email
+from services.email.providers.smtp import send_message
 
 MCP_PATH = "/mcp/email"
 MCP_RESOURCE_URL = config.get("MCP_RESOURCE_URL", "http://localhost:8000")
@@ -54,15 +55,18 @@ def _get_user_id(ctx: Context) -> str | None:
     return None
 
 def _fetch_messages(user_id: str | None, folder: str, criteria, limit=20, offset=0,
-                    with_snippet=False) -> list[dict]:
+                    with_snippet=False, *, capability: str) -> list[dict]:
     """Shared fetch used by list_emails and search_emails.
 
-    Returns newest-first. Uses UID search to get all matching UIDs, 
-    applies offset and limit to the UIDs, and then fetches only the 
+    Returns newest-first. Uses UID search to get all matching UIDs,
+    applies offset and limit to the UIDs, and then fetches only the
     needed messages to avoid downloading unnecessary data.
+
+    `capability` differs per caller (list vs search), so it has no default —
+    forgetting it should be an error, not a silently ungated read.
     """
     results = []
-    with get_mailbox(user_id) as mailbox:
+    with get_mailbox(user_id, capability=capability) as mailbox:
         mailbox.folder.set(folder)
         
         criteria_str = str(criteria)
@@ -123,7 +127,9 @@ def _resolve_drafts_folder(mailbox) -> str:
 def list_folders(ctx: Context) -> list[str]:
     """List all available IMAP folders (e.g., INBOX, INBOX.Drafts, etc.). Use this to find the exact folder name to use for other tools."""
     user_id = _get_user_id(ctx)
-    with get_mailbox(user_id) as mailbox:
+    # Gated on email.read: folder names are user data (clients, projects),
+    # not neutral metadata, and listing them is only useful before a read.
+    with get_mailbox(user_id, capability="email.read") as mailbox:
         return [f.name for f in mailbox.folder.list()]
 
 @mcp.tool()
@@ -157,13 +163,13 @@ def list_emails(ctx: Context, folder: str = "INBOX", limit: int = 20, offset: in
     criteria = AND(**conditions) if conditions else AND(all=True)
 
     return _fetch_messages(user_id, folder, criteria, limit=limit, offset=offset,
-                          with_snippet=with_snippet)
+                          with_snippet=with_snippet, capability="email.read")
 
 @mcp.tool()
 def read_email(ctx: Context, uid: str, folder: str = "INBOX") -> dict:
     """Read a single email by UID. Returns full headers, plain text body, and attachment names."""
     user_id = _get_user_id(ctx)
-    with get_mailbox(user_id) as mailbox:
+    with get_mailbox(user_id, capability="email.read") as mailbox:
         mailbox.folder.set(folder)
         msgs = list(mailbox.fetch(AND(uid=uid), mark_seen=False))
         if not msgs:
@@ -197,7 +203,8 @@ def get_attachment(ctx: Context, uid: str, folder: str = "INBOX", index: int = -
     Images are returned natively so the AI can see them. Non-images return base64 text.
     """
     user_id = _get_user_id(ctx)
-    with get_mailbox(user_id) as mailbox:
+    # No separate attachments capability exists yet, so this rides on read.
+    with get_mailbox(user_id, capability="email.read") as mailbox:
         mailbox.folder.set(folder)
         msgs = list(mailbox.fetch(AND(uid=uid), mark_seen=False))
         if not msgs:
@@ -276,14 +283,14 @@ def search_emails(ctx: Context, query: str = "", subject: str = "", sender: str 
     criteria = AND(**kwargs) if kwargs else AND(all=True)
 
     return _fetch_messages(user_id, folder, criteria, limit=limit, offset=offset,
-                          with_snippet=with_snippet)
+                          with_snippet=with_snippet, capability="email.search")
 
 @mcp.tool()
 def draft_email(ctx: Context, to: str, subject: str, body: str, cc: str = "") -> dict:
     """Save a draft email to the Drafts folder. SMTP submission is skipped — draft is appended to the Drafts IMAP folder."""
     user_id = _get_user_id(ctx)
     msg = MIMEText(body, "plain", "utf-8")
-    msg["From"] = LOCAL_EMAIL
+    msg["From"] = get_connected_email(user_id, capability="email.draft")
     msg["To"] = to
     if cc:
         msg["Cc"] = cc
@@ -291,7 +298,7 @@ def draft_email(ctx: Context, to: str, subject: str, body: str, cc: str = "") ->
     msg["Date"] = email.utils.formatdate(localtime=True)
     msg["Message-ID"] = email.utils.make_msgid()
 
-    with get_mailbox(user_id) as mailbox:
+    with get_mailbox(user_id, capability="email.draft") as mailbox:
         drafts_folder = _resolve_drafts_folder(mailbox)
         mailbox.append(
             msg.as_bytes(),
@@ -308,6 +315,30 @@ def draft_email(ctx: Context, to: str, subject: str, body: str, cc: str = "") ->
     }
 
 @mcp.tool()
+def send_email(ctx: Context, to: str, subject: str, body: str, cc: str = "") -> dict:
+    """Send an email immediately via SMTP. Requires the email.send capability
+    on the connected account — unlike the other tools here, this is
+    irreversible, so an account without that capability granted raises
+    instead of silently falling back to one that has it."""
+    user_id = _get_user_id(ctx)
+    msg = MIMEText(body, "plain", "utf-8")
+    msg["From"] = get_connected_email(user_id, capability="email.send")
+    msg["To"] = to
+    if cc:
+        msg["Cc"] = cc
+    msg["Subject"] = subject
+    msg["Date"] = email.utils.formatdate(localtime=True)
+    msg["Message-ID"] = email.utils.make_msgid()
+
+    send_message(user_id, msg)
+
+    return {
+        "status": "sent",
+        "to": to,
+        "subject": subject,
+    }
+
+@mcp.tool()
 def mark_emails_seen(ctx: Context, uids: list[str], folder: str = "INBOX", seen: bool = True) -> dict:
     """Mark multiple emails as read (seen) or unread.
 
@@ -317,7 +348,7 @@ def mark_emails_seen(ctx: Context, uids: list[str], folder: str = "INBOX", seen:
         seen: True to mark as read, False to mark as unread.
     """
     user_id = _get_user_id(ctx)
-    with get_mailbox(user_id) as mailbox:
+    with get_mailbox(user_id, capability="email.mark_seen") as mailbox:
         mailbox.folder.set(folder)
         if uids:
             mailbox.flag(uids, MailMessageFlags.SEEN, seen)

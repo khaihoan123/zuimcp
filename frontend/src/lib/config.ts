@@ -79,7 +79,7 @@ export const serviceCategories: ServiceCategory[] = [
 		connectors: [
 			{
 				id: 'imap',
-				label: 'IMAP',
+				label: 'IMAP / SMTP',
 				description: 'Any standards-compliant mailbox, using an app password.',
 				availability: 'available',
 				icon: 'server',
@@ -138,7 +138,8 @@ export const capabilityLabels: Record<string, string> = {
 	'email.read': 'Read emails',
 	'email.search': 'Search emails',
 	'email.mark_seen': 'Mark read / unread',
-	'email.draft': 'Create drafts'
+	'email.draft': 'Create drafts',
+	'email.send': 'Send emails'
 };
 
 export function capabilityLabel(capability: string): string {

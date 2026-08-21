@@ -42,6 +42,17 @@ export const auth = betterAuth({
 	emailAndPassword: {
 		enabled: true
 	},
+	account: {
+		accountLinking: {
+			enabled: true,
+			// Google/GitHub verify the email themselves before returning it, so
+			// if it matches an existing user we link this login method onto
+			// that account instead of erroring with account_not_linked. Without
+			// this, anyone who originally signed up with email/password can
+			// never also sign in via a social provider using that same address.
+			trustedProviders: ['google', 'github']
+		}
+	},
 	// Sign-in via Google/GitHub (Better Auth acting as an OAuth *client*) —
 	// distinct from the oauthProvider plugin below, where Better Auth is the
 	// OAuth *server* that MCP clients authorize against. Unrelated flows,

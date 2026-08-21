@@ -1,4 +1,5 @@
 import json
+import smtplib
 
 from fastapi import APIRouter, Depends, HTTPException
 from imap_tools import MailBox
@@ -12,7 +13,13 @@ from models import Connection, Permission
 
 router = APIRouter(prefix="/api/connections", tags=["connections"])
 
-DEFAULT_IMAP_CAPABILITIES = ["email.read", "email.search", "email.mark_seen", "email.draft"]
+DEFAULT_IMAP_CAPABILITIES = [
+    "email.read",
+    "email.search",
+    "email.mark_seen",
+    "email.draft",
+    "email.send",
+]
 
 
 class PermissionOut(BaseModel):
@@ -36,6 +43,8 @@ class CreateImapConnectionIn(BaseModel):
     port: int = 993
     email: str
     password: str
+    smtp_host: str
+    smtp_port: int = 587
 
 
 class UpdateConnectionIn(BaseModel):
@@ -71,15 +80,31 @@ def create_imap_connection(
     user_id: str = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
-    # Fail fast — verify the credentials actually work before ever storing them.
+    # Fail fast — verify both protocols actually work before ever storing
+    # credentials. IMAP first since it's required; SMTP failing after IMAP
+    # succeeds still means nothing gets saved.
     try:
         with MailBox(body.host, body.port).login(body.email, body.password):
             pass
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Could not connect: {e}")
+        raise HTTPException(status_code=400, detail=f"Could not connect to IMAP: {e}")
+
+    try:
+        with smtplib.SMTP(body.smtp_host, body.smtp_port) as smtp:
+            smtp.starttls()
+            smtp.login(body.email, body.password)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Could not connect to SMTP: {e}")
 
     credentials = json.dumps(
-        {"host": body.host, "port": body.port, "email": body.email, "password": body.password}
+        {
+            "host": body.host,
+            "port": body.port,
+            "email": body.email,
+            "password": body.password,
+            "smtp_host": body.smtp_host,
+            "smtp_port": body.smtp_port,
+        }
     )
     connection = Connection(
         user_id=user_id,

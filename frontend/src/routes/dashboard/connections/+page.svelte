@@ -31,7 +31,18 @@
 	let addSubmitting = $state(false);
 	let addError = $state('');
 	let addedName = $state('');
-	let form = $state({ display_name: '', host: '', port: 993, email: '', password: '' });
+	let form = $state({
+		display_name: '',
+		host: '',
+		port: 993,
+		email: '',
+		password: '',
+		smtp_host: '',
+		smtp_port: 587
+	});
+	/** True until the user edits smtp_host directly, so it tracks host for
+	 * providers that use the same base domain (mail.example.com for both). */
+	let smtpHostTouched = false;
 
 	/** Which category's endpoint was just copied, so the tick shows on the right card. */
 	let copiedCategory = $state<string | null>(null);
@@ -68,8 +79,27 @@
 		connecting = connector;
 		addError = '';
 		addedName = '';
-		form = { display_name: '', host: '', port: 993, email: '', password: '' };
+		form = {
+			display_name: '',
+			host: '',
+			port: 993,
+			email: '',
+			password: '',
+			smtp_host: '',
+			smtp_port: 587
+		};
+		smtpHostTouched = false;
 		dialogOpen = true;
+	}
+
+	function onHostInput(value: string) {
+		form.host = value;
+		if (!smtpHostTouched) form.smtp_host = value;
+	}
+
+	function onSmtpHostInput(value: string) {
+		smtpHostTouched = true;
+		form.smtp_host = value;
 	}
 
 	async function addConnection(e: SubmitEvent) {
@@ -248,11 +278,35 @@
 			<div class="flex gap-3">
 				<div class="flex flex-1 flex-col gap-1.5">
 					<Label for="host">IMAP host</Label>
-					<Input id="host" type="text" bind:value={form.host} placeholder="mail.example.com" required />
+					<Input
+						id="host"
+						type="text"
+						value={form.host}
+						oninput={(e) => onHostInput(e.currentTarget.value)}
+						placeholder="mail.example.com"
+						required
+					/>
 				</div>
 				<div class="flex flex-col gap-1.5">
 					<Label for="port">Port</Label>
 					<Input id="port" type="number" bind:value={form.port} required class="w-24" />
+				</div>
+			</div>
+			<div class="flex gap-3">
+				<div class="flex flex-1 flex-col gap-1.5">
+					<Label for="smtp_host">SMTP host</Label>
+					<Input
+						id="smtp_host"
+						type="text"
+						value={form.smtp_host}
+						oninput={(e) => onSmtpHostInput(e.currentTarget.value)}
+						placeholder="mail.example.com"
+						required
+					/>
+				</div>
+				<div class="flex flex-col gap-1.5">
+					<Label for="smtp_port">Port</Label>
+					<Input id="smtp_port" type="number" bind:value={form.smtp_port} required class="w-24" />
 				</div>
 			</div>
 			<div class="flex flex-col gap-1.5">
