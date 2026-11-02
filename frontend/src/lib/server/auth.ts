@@ -80,6 +80,13 @@ export const auth = betterAuth({
 			loginPage: '/login',
 			consentPage: '/consent',
 			allowDynamicClientRegistration: true,
+			// Without this, /oauth2/register 401s with "Authentication
+			// required for client registration" — it defaults to requiring a
+			// session, but an MCP client (Claude, etc.) registers itself
+			// BEFORE any user is authenticated; that's the entire point of
+			// dynamic client registration. Public clients only (no client
+			// secret issued), which is correct for this flow.
+			allowUnauthenticatedClientRegistration: true,
 			// Must exactly equal the "resource" value an MCP client requests
 			// (RFC 8707), which is the full protected-resource identifier —
 			// i.e. FastAPI's base URL + its /mcp/<service> path, NOT the bare
