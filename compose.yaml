@@ -42,10 +42,6 @@ services:
       AUTH_JWKS_URI: https://${APP_DOMAIN}/auth/jwks
       # Bare origin. service.py appends MCP_PATH to build RESOURCE_INDICATOR.
       MCP_RESOURCE_URL: https://${MCP_DOMAIN:?set MCP_DOMAIN in .env}
-      IMAP_HOST: ${IMAP_HOST:-mail.sunslifestyle.com}
-      IMAP_PORT: ${IMAP_PORT:-993}
-      SMTP_HOST: ${SMTP_HOST:-mail.sunslifestyle.com}
-      SMTP_PORT: ${SMTP_PORT:-587}
     depends_on:
       db:
         condition: service_healthy

@@ -1,6 +1,8 @@
-IMAP_HOST: "mail.sunslifestyle.com"
+# Mail server for local stdio mode only (EMAIL_ADDRESS/EMAIL_PASSWORD in .env).
+# Connected accounts store their own host and port.
+IMAP_HOST: "imap.example.com"
 IMAP_PORT: 993
-SMTP_HOST: "mail.sunslifestyle.com"
+SMTP_HOST: "smtp.example.com"
 SMTP_PORT: 587
 
 # Better Auth (SvelteKit) is the OAuth 2.1 authorization server. This app is
