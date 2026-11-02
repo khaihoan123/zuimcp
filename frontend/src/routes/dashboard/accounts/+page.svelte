@@ -175,7 +175,7 @@
 	</Card.Root>
 {/snippet}
 
-<div class="mx-auto max-w-3xl px-6 py-10">
+<div class="mx-auto max-w-4xl">
 	<div class="flex items-center justify-between gap-4">
 		<div>
 			<h1 class="text-2xl font-semibold">Connected accounts</h1>

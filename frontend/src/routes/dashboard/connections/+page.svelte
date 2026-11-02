@@ -129,7 +129,7 @@
 	<title>Connections</title>
 </svelte:head>
 
-<div class="mx-auto max-w-5xl px-6 py-10">
+<div>
 	<h1 class="text-2xl font-semibold">Connections</h1>
 	<p class="mt-2 text-sm text-muted-foreground">
 		Pick a connector to link an account. Each service has its own MCP endpoint — your agent connects

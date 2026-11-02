@@ -146,6 +146,17 @@ export function capabilityLabel(capability: string): string {
 	return capabilityLabels[capability] ?? capability;
 }
 
+/** Human labels for the `status` field on an /api/audit-log entry. */
+export const auditStatusLabels: Record<string, string> = {
+	success: 'Success',
+	rate_limited: 'Rate limited',
+	error: 'Error'
+};
+
+export function auditStatusLabel(status: string): string {
+	return auditStatusLabels[status] ?? status;
+}
+
 const capabilityOrder = Object.keys(capabilityLabels);
 
 /**

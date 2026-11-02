@@ -2,6 +2,7 @@
 	import { page } from '$app/state';
 	import { goto, invalidateAll } from '$app/navigation';
 	import { authClient } from '$lib/auth-client';
+	import HistoryIcon from '@lucide/svelte/icons/history';
 	import LayoutDashboardIcon from '@lucide/svelte/icons/layout-dashboard';
 	import LogOutIcon from '@lucide/svelte/icons/log-out';
 	import PlugIcon from '@lucide/svelte/icons/plug';
@@ -19,7 +20,8 @@
 			label: 'Connected accounts',
 			icon: UserRoundIcon,
 			exact: false
-		}
+		},
+		{ href: '/dashboard/activity', label: 'Activity', icon: HistoryIcon, exact: false }
 	];
 
 	let initials = $derived(
@@ -102,7 +104,9 @@
 		</aside>
 
 		<main class="min-w-0 flex-1">
-			{@render children()}
+			<div class="mx-auto w-full max-w-7xl px-6 py-10">
+				{@render children()}
+			</div>
 		</main>
 	</div>
 </div>

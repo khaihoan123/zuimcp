@@ -53,7 +53,7 @@
 	<title>Overview</title>
 </svelte:head>
 
-<div class="mx-auto max-w-4xl px-6 py-10">
+<div class="mx-auto max-w-4xl">
 	<h1 class="text-2xl font-semibold">Overview</h1>
 	<p class="mt-2 text-sm text-muted-foreground">
 		What your AI agent can currently reach through {data.user?.email}.
@@ -146,20 +146,24 @@
 		</ul>
 	{/if}
 
-	<!-- Activity: no audit log exists on the backend yet, so say so plainly. -->
-	<h2 class="mt-10 mb-3 text-sm font-medium tracking-wide text-muted-foreground uppercase">
-		Activity
-	</h2>
+	<!-- Activity: links out to the real audit log page instead of duplicating it here. -->
+	<div class="mt-10 mb-3 flex items-center justify-between">
+		<h2 class="text-sm font-medium tracking-wide text-muted-foreground uppercase">Activity</h2>
+		<Button href="/dashboard/activity" variant="outline" size="sm">
+			View all
+			<ArrowRightIcon />
+		</Button>
+	</div>
 	<Card.Root>
 		<Card.Content class="flex items-start gap-4">
 			<span class="grid size-10 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground">
 				<ScrollTextIcon class="size-5" />
 			</span>
 			<div>
-				<p class="font-medium">Activity log not available yet</p>
+				<p class="font-medium">See what your agent has been doing</p>
 				<p class="mt-1 text-sm text-muted-foreground">
-					Once built, this will show every request your agent made — which account, which capability,
-					and when — so you can audit what it actually did.
+					Every tool call your agent makes — which capability, and whether it succeeded — is logged
+					on the Activity page.
 				</p>
 			</div>
 		</Card.Content>
