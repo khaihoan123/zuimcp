@@ -8,10 +8,13 @@ from email.mime.text import MIMEText
 from fastmcp import Context, FastMCP
 from fastmcp.server.auth import RemoteAuthProvider
 from fastmcp.server.auth.providers.jwt import JWTVerifier
+from fastmcp.server.middleware.rate_limiting import SlidingWindowRateLimitingMiddleware
 from imap_tools import AND, MailMessageFlags
 from mcp.types import ImageContent, TextContent
 
 from core.config import config
+from core.mcp_auth import get_user_id as _get_user_id
+from core.middleware import AuditLoggingMiddleware
 from services.email.providers.imap import get_mailbox, get_connected_email
 from services.email.providers.smtp import send_message
 
@@ -40,6 +43,17 @@ auth = RemoteAuthProvider(
 )
 mcp = FastMCP("mail_mcp", auth=auth)
 
+# Added first so it's outermost and also observes/logs RateLimitError raised by
+# the rate limiter below (FastMCP.add_middleware appends; first added = outermost).
+mcp.add_middleware(AuditLoggingMiddleware())
+mcp.add_middleware(
+    SlidingWindowRateLimitingMiddleware(
+        max_requests=config.get("MCP_RATE_LIMIT_PER_MINUTE", 60),
+        window_minutes=1,
+        get_client_id=lambda ctx: _get_user_id(ctx.fastmcp_context) or "anonymous",
+    )
+)
+
 
 def _snippet(msg, length: int = 200) -> str:
     """Plain-text preview of a message body, HTML stripped and whitespace collapsed."""
@@ -47,12 +61,6 @@ def _snippet(msg, length: int = 200) -> str:
     text = re.sub(r"<[^>]+>", " ", text)      # strip HTML tags
     text = re.sub(r"\s+", " ", text).strip()  # collapse whitespace
     return text[:length]
-
-def _get_user_id(ctx: Context) -> str | None:
-    """Extract the Better Auth user id (JWT `sub` claim) from the request context."""
-    if hasattr(ctx, "request_context") and ctx.request_context and hasattr(ctx.request_context, "auth") and ctx.request_context.auth:
-        return ctx.request_context.auth.claims.get("sub")
-    return None
 
 def _fetch_messages(user_id: str | None, folder: str, criteria, limit=20, offset=0,
                     with_snippet=False, *, capability: str) -> list[dict]:

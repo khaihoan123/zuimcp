@@ -3,6 +3,7 @@ import sys
 import uvicorn
 from fastapi import FastAPI
 
+from api.audit_log import router as audit_log_router
 from api.connections import router as connections_router
 from services.email.service import mcp, auth, MCP_PATH
 
@@ -22,6 +23,7 @@ def health_check():
 
 
 app.include_router(connections_router)
+app.include_router(audit_log_router)
 app.mount("/", mcp_app)
 
 
