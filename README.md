@@ -72,6 +72,19 @@ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 
 Defaults live in `backend/config.yaml`; environment variables override them.
 
+### Running tests
+
+The backend tests need Postgres. They use a separate database whose name ends in
+`_test` (by default your `DATABASE_URL` with `_test` appended — create it once with
+`createdb mcp_platform_test`), and drop all its tables on every run.
+
+```bash
+cd backend && uv run pytest              # or set TEST_DATABASE_URL explicitly
+cd frontend && npm run check
+```
+
+GitHub Actions runs both on every push and pull request.
+
 ### Single-user stdio mode
 
 For a quick local test without the dashboard, set `EMAIL_ADDRESS` and `EMAIL_PASSWORD`

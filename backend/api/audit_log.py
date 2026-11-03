@@ -31,6 +31,6 @@ def list_audit_log(
         db.query(AuditLog)
         .filter(AuditLog.user_id == user_id)
         .order_by(AuditLog.created_at.desc())
-        .limit(min(limit, 200))
+        .limit(max(1, min(limit, 200)))
         .all()
     )

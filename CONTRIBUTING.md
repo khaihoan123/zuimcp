@@ -16,7 +16,8 @@ See [README.md](README.md#local-development) for setup.
 - Backend: keep tools thin; every tool must pass its `capability` when resolving a
   connection, and new tools need an entry in `TOOL_CAPABILITY` (`backend/core/middleware.py`).
 - Database changes go through Alembic: `uv run alembic revision --autogenerate -m "..."`.
-- Frontend: run `npm run check` before opening a pull request.
+- Run `uv run pytest` (backend) and `npm run check` (frontend) before opening a pull request.
+  New permission or auth behaviour needs a test.
 - Never commit `.env` files, credentials, or real mailbox data in tests or screenshots.
 
 ## Pull requests
