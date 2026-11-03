@@ -17,3 +17,7 @@ MCP_RESOURCE_URL: "http://localhost:8000"
 # Max MCP tool calls per user per minute, enforced by a sliding-window
 # middleware in services/email/service.py. Guards against a runaway agent loop.
 MCP_RATE_LIMIT_PER_MINUTE: 60
+
+# SSRF guard (core/net.py): refuse mail servers on private/internal addresses.
+# Set true only when self-hosting with a mail server on your own LAN.
+ALLOW_PRIVATE_MAIL_HOSTS: false

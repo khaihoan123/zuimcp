@@ -5,6 +5,7 @@ from sqlalchemy import text
 
 from core.config import config, LOCAL_EMAIL, LOCAL_PASS
 from core.db import SessionLocal
+from core.net import MAIL_CONNECT_TIMEOUT, ensure_public_host
 from core.security import decrypt_credentials
 
 def _resolve_connection(user_id: str, account: str | None, capability: str | None = None) -> dict:
@@ -69,6 +70,7 @@ def get_mailbox(
 ) -> MailBox:
     if user_id:
         creds = _resolve_connection(user_id, account, capability)
+        ensure_public_host(creds["host"], creds["port"])
     else:
         if not LOCAL_EMAIL or not LOCAL_PASS:
             raise ValueError("Local credentials missing in .env (stdio mode)")
@@ -78,7 +80,9 @@ def get_mailbox(
             "email": LOCAL_EMAIL,
             "password": LOCAL_PASS,
         }
-    return MailBox(creds["host"], creds["port"]).login(creds["email"], creds["password"])
+    return MailBox(creds["host"], creds["port"], timeout=MAIL_CONNECT_TIMEOUT).login(
+        creds["email"], creds["password"]
+    )
 
 
 def get_connected_email(

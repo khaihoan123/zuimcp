@@ -1,15 +1,19 @@
 import json
+import logging
 import smtplib
 
 from fastapi import APIRouter, Depends, HTTPException
-from imap_tools import MailBox
+from imap_tools import MailBox, MailboxLoginError
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
 from core.auth import get_current_user_id
 from core.db import get_db
+from core.net import MAIL_CONNECT_TIMEOUT, UnsafeHostError, ensure_public_host
 from core.security import encrypt_credentials
 from models import Connection, Permission
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/connections", tags=["connections"])
 
@@ -80,21 +84,37 @@ def create_imap_connection(
     user_id: str = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
+    try:
+        ensure_public_host(body.host, body.port)
+        ensure_public_host(body.smtp_host, body.smtp_port)
+    except UnsafeHostError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
     # Fail fast — verify both protocols actually work before ever storing
     # credentials. IMAP first since it's required; SMTP failing after IMAP
-    # succeeds still means nothing gets saved.
+    # succeeds still means nothing gets saved. Errors shown to the user stay
+    # generic: echoing the raw exception would leak server banners and make
+    # the form a handy network-probing tool. The real cause goes to the log.
     try:
-        with MailBox(body.host, body.port).login(body.email, body.password):
+        with MailBox(body.host, body.port, timeout=MAIL_CONNECT_TIMEOUT).login(
+            body.email, body.password
+        ):
             pass
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Could not connect to IMAP: {e}")
+    except MailboxLoginError:
+        raise HTTPException(status_code=400, detail="IMAP login failed — check the email and password")
+    except Exception:
+        logger.warning("IMAP connection test failed for %s:%s", body.host, body.port, exc_info=True)
+        raise HTTPException(status_code=400, detail="Could not connect to the IMAP server — check the host and port")
 
     try:
-        with smtplib.SMTP(body.smtp_host, body.smtp_port) as smtp:
+        with smtplib.SMTP(body.smtp_host, body.smtp_port, timeout=MAIL_CONNECT_TIMEOUT) as smtp:
             smtp.starttls()
             smtp.login(body.email, body.password)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Could not connect to SMTP: {e}")
+    except smtplib.SMTPAuthenticationError:
+        raise HTTPException(status_code=400, detail="SMTP login failed — check the email and password")
+    except Exception:
+        logger.warning("SMTP connection test failed for %s:%s", body.smtp_host, body.smtp_port, exc_info=True)
+        raise HTTPException(status_code=400, detail="Could not connect to the SMTP server — check the host and port")
 
     credentials = json.dumps(
         {

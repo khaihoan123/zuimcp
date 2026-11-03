@@ -2,6 +2,7 @@ import smtplib
 from email.message import Message
 
 from core.config import LOCAL_EMAIL, LOCAL_PASS, config
+from core.net import MAIL_CONNECT_TIMEOUT, ensure_public_host
 from services.email.providers.imap import _resolve_connection
 
 
@@ -20,7 +21,10 @@ def _resolve_smtp_credentials(user_id: str | None, account: str | None, capabili
 
 def send_message(user_id: str | None, msg: Message, account: str | None = None) -> None:
     creds = _resolve_smtp_credentials(user_id, account, capability="email.send")
-    with smtplib.SMTP(creds["smtp_host"], creds.get("smtp_port", 587)) as smtp:
+    smtp_port = creds.get("smtp_port", 587)
+    if user_id:
+        ensure_public_host(creds["smtp_host"], smtp_port)
+    with smtplib.SMTP(creds["smtp_host"], smtp_port, timeout=MAIL_CONNECT_TIMEOUT) as smtp:
         smtp.starttls()
         smtp.login(creds["email"], creds["password"])
         smtp.send_message(msg)

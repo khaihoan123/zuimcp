@@ -42,6 +42,8 @@ services:
       AUTH_JWKS_URI: https://${APP_DOMAIN}/auth/jwks
       # Bare origin. service.py appends MCP_PATH to build RESOURCE_INDICATOR.
       MCP_RESOURCE_URL: https://${MCP_DOMAIN:?set MCP_DOMAIN in .env}
+      # true only if your mail server is on a private network (see config.yaml).
+      ALLOW_PRIVATE_MAIL_HOSTS: ${ALLOW_PRIVATE_MAIL_HOSTS:-false}
     depends_on:
       db:
         condition: service_healthy
