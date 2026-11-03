@@ -22,3 +22,8 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Deprecation notices raised inside third-party packages, not our code.
+filterwarnings = [
+    "ignore:.*CallSpec2.*:DeprecationWarning",
+    "ignore:Using `httpx` with `starlette.testclient`",
+]
