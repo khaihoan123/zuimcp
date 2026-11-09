@@ -10,7 +10,7 @@ def get_current_user_id(request: Request) -> str:
     """Identifies the logged-in dashboard user from Better Auth's session
     cookie. Used by REST endpoints the browser calls directly (connections
     CRUD, etc.) — NOT by MCP tools, which authenticate via OAuth bearer
-    tokens instead (see services/email/service.py's _get_user_id)."""
+    tokens instead (see core/mcp_auth.py)."""
     # Better Auth prefixes the cookie with __Secure- once it is serving over
     # HTTPS, so the plain name only exists in local dev. Check both or every
     # dashboard request 401s in production.

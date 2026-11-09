@@ -44,9 +44,8 @@
 	 * providers that use the same base domain (mail.example.com for both). */
 	let smtpHostTouched = false;
 
-	/** Which category's endpoint was just copied, so the tick shows on the right card. */
-	let copiedCategory = $state<string | null>(null);
-	let copyFailedCategory = $state<string | null>(null);
+	let copied = $state(false);
+	let copyFailed = $state(false);
 
 	function countFor(serviceType: string) {
 		return connections.filter((c) => c.service_type === serviceType).length;
@@ -62,16 +61,16 @@
 		}
 	});
 
-	async function copyEndpoint(categoryId: string, url: string) {
-		copyFailedCategory = null;
+	async function copyEndpoint() {
+		copyFailed = false;
 		try {
-			await navigator.clipboard.writeText(url);
-			copiedCategory = categoryId;
-			setTimeout(() => (copiedCategory = null), 2000);
+			await navigator.clipboard.writeText(data.mcpEndpoint);
+			copied = true;
+			setTimeout(() => (copied = false), 2000);
 		} catch {
 			// Clipboard is blocked on insecure origins and without permission —
 			// tell the user rather than silently doing nothing.
-			copyFailedCategory = categoryId;
+			copyFailed = true;
 		}
 	}
 
@@ -132,9 +131,46 @@
 <div>
 	<h1 class="text-2xl font-semibold">Connections</h1>
 	<p class="mt-2 text-sm text-muted-foreground">
-		Pick a connector to link an account. Each service has its own MCP endpoint — your agent connects
-		to one endpoint per service, not a single shared one.
+		Pick a connector to link an account. You can connect several accounts per service.
 	</p>
+
+	<!-- One endpoint for everything: the agent sees the tools each account allows. -->
+	<Card.Root class="mt-6" size="sm">
+		<Card.Content class="flex flex-col gap-2">
+			<div class="flex items-center gap-2">
+				<p class="text-sm font-medium">Your MCP endpoint</p>
+				<Badge variant="secondary">Live</Badge>
+			</div>
+			<div class="flex items-center gap-2">
+				<code
+					class="min-w-0 flex-1 truncate rounded-lg border border-border bg-muted/50 px-3 py-2 font-mono text-sm"
+				>
+					{data.mcpEndpoint}
+				</code>
+				<Button
+					variant="outline"
+					size="icon"
+					onclick={copyEndpoint}
+					aria-label="Copy MCP endpoint URL"
+				>
+					{#if copied}
+						<CheckIcon />
+					{:else}
+						<CopyIcon />
+					{/if}
+				</Button>
+			</div>
+			{#if copyFailed}
+				<p class="text-sm text-destructive">
+					Couldn't access the clipboard — select the URL and copy it manually.
+				</p>
+			{/if}
+			<p class="text-sm text-muted-foreground">
+				One URL for all your accounts. Add it as a remote MCP server in your agent's config — auth
+				is OAuth, so there's no API key. Your agent only sees the actions you allow on each account.
+			</p>
+		</Card.Content>
+	</Card.Root>
 
 	{#if addedName}
 		<div
@@ -155,56 +191,12 @@
 	{/if}
 
 	{#each serviceCategories as category (category.id)}
-		{@const endpoint = data.mcpEndpoints[category.id]}
 		<section class="mt-10">
 			<div class="mb-1 flex items-baseline gap-3">
 				<h2 class="text-base font-semibold">{category.label}</h2>
 				<span class="text-sm text-muted-foreground">{category.description}</span>
 			</div>
 
-			<!-- Endpoint is scoped to THIS service, and labelled as such. -->
-			{#if category.hasEndpoint && endpoint}
-				<Card.Root class="mt-4" size="sm">
-					<Card.Content class="flex flex-col gap-2">
-						<div class="flex items-center gap-2">
-							<p class="text-sm font-medium">{category.label} MCP endpoint</p>
-							<Badge variant="secondary">Live</Badge>
-						</div>
-						<div class="flex items-center gap-2">
-							<code
-								class="min-w-0 flex-1 truncate rounded-lg border border-border bg-muted/50 px-3 py-2 font-mono text-sm"
-							>
-								{endpoint}
-							</code>
-							<Button
-								variant="outline"
-								size="icon"
-								onclick={() => copyEndpoint(category.id, endpoint)}
-								aria-label="Copy {category.label} endpoint URL"
-							>
-								{#if copiedCategory === category.id}
-									<CheckIcon />
-								{:else}
-									<CopyIcon />
-								{/if}
-							</Button>
-						</div>
-						{#if copyFailedCategory === category.id}
-							<p class="text-sm text-destructive">
-								Couldn't access the clipboard — select the URL and copy it manually.
-							</p>
-						{/if}
-						<p class="text-sm text-muted-foreground">
-							Serves your {category.label.toLowerCase()} accounts only. Add it as a remote MCP server
-							in your agent's config — auth is OAuth, so there's no API key.
-						</p>
-					</Card.Content>
-				</Card.Root>
-			{:else}
-				<p class="mt-4 rounded-lg border border-dashed border-border px-4 py-3 text-sm text-muted-foreground">
-					{category.label} will get a separate MCP endpoint, shown here once the service is available.
-				</p>
-			{/if}
 
 			<div class="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
 				{#each category.connectors as connector (connector.id)}

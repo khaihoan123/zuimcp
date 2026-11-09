@@ -11,12 +11,9 @@ export const load: LayoutServerLoad = async ({ parent }) => {
 
 	return {
 		user,
-		// One endpoint PER service, keyed by service category id — each service runs its
-		// own MCP server (/mcp/email, /mcp/odoo …). The email value is the same string the
-		// backend computes as RESOURCE_INDICATOR (MCP_RESOURCE_URL + MCP_PATH) and that
-		// Better Auth lists in validAudiences, so read the env var rather than rebuild it.
-		mcpEndpoints: {
-			email: env.MCP_RESOURCE_INDICATOR || 'http://localhost:8000/mcp/email'
-		} as Record<string, string | undefined>
+		// The ONE MCP endpoint, serving every service's tools. Same string the backend
+		// computes as RESOURCE_INDICATOR (MCP_RESOURCE_URL + MCP_PATH) and that Better
+		// Auth lists in validAudiences, so read the env var rather than rebuild it.
+		mcpEndpoint: env.MCP_RESOURCE_INDICATOR || 'http://localhost:8000/mcp'
 	};
 };

@@ -74,8 +74,8 @@ export const auth = betterAuth({
 		// OAuth 2.1 authorization server (successor to the deprecated mcp
 		// plugin): /oauth2/authorize, /oauth2/token, dynamic client
 		// registration, PKCE. MCP clients (Claude, etc.) authorize against
-		// this; FastAPI hosts one protected resource per service, each
-		// under /mcp/<service> (e.g. /mcp/email, /mcp/odoo later).
+		// this; FastAPI hosts ONE protected resource, /mcp, which serves
+		// every service's tools (email_*, odoo_* ...).
 		oauthProvider({
 			loginPage: '/login',
 			consentPage: '/consent',
@@ -89,12 +89,12 @@ export const auth = betterAuth({
 			allowUnauthenticatedClientRegistration: true,
 			// Must exactly equal the "resource" value an MCP client requests
 			// (RFC 8707), which is the full protected-resource identifier —
-			// i.e. FastAPI's base URL + its /mcp/<service> path, NOT the bare
+			// i.e. FastAPI's base URL + its /mcp path, NOT the bare
 			// origin. Mismatch here fails token exchange with "requested
 			// resource invalid" and silently falls back to an opaque
 			// (non-JWT) access_token instead of erroring, which is easy to
-			// miss. Add one entry per service as they're built (Odoo, etc.).
-			validAudiences: [process.env.MCP_RESOURCE_INDICATOR ?? 'http://localhost:8000/mcp/email'],
+			// miss.
+			validAudiences: [process.env.MCP_RESOURCE_INDICATOR ?? 'http://localhost:8000/mcp'],
 			scopes: ['openid', 'profile', 'email', 'offline_access']
 		})
 	]

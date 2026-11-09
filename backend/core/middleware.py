@@ -4,27 +4,38 @@ import anyio
 from fastmcp.server.middleware import Middleware, MiddlewareContext
 from fastmcp.server.middleware.rate_limiting import RateLimitError
 
+from core.accounts import granted_capabilities
 from core.db import SessionLocal
 from core.mcp_auth import get_user_id
 from models import AuditLog
 
 logger = logging.getLogger(__name__)
 
-# Static per-tool capability mapping (mirrors the capability= argument each tool
-# passes to get_mailbox()/get_connected_email() in services/email/service.py) —
-# the middleware only sees the tool name and arguments, not which capability the
-# tool internally checked, so this has to be kept in sync by hand if a tool's
-# capability changes.
-TOOL_CAPABILITY = {
-    "list_folders": "email.read",
-    "list_emails": "email.read",
-    "read_email": "email.read",
-    "get_attachment": "email.read",
-    "search_emails": "email.search",
-    "draft_email": "email.draft",
-    "send_email": "email.send",
-    "mark_emails_seen": "email.mark_seen",
-}
+# Tool name -> the capability it needs (None = needs none, e.g. list_accounts).
+# Filled by core.mcp_server.service_tool() as each tool is registered, so a
+# tool's capability is declared once, next to the tool itself.
+TOOL_CAPABILITY: dict[str, str | None] = {}
+
+
+class ToolFilterMiddleware(Middleware):
+    """Shows each user only the tools at least one of their accounts allows.
+
+    If no account may send, the agent never sees email_send at all. This is
+    about a clean tool list, not security: a hidden tool that still gets called
+    is refused by core.accounts.resolve_account() anyway. MCP clients cache the
+    list, so a permission change shows up after the client reconnects.
+    """
+
+    async def on_list_tools(self, context: MiddlewareContext, call_next):
+        tools = await call_next(context)
+        user_id = get_user_id(context.fastmcp_context)
+        if not user_id:
+            return tools  # local stdio mode: one user, every tool
+        granted = await anyio.to_thread.run_sync(granted_capabilities, user_id)
+        return [
+            t for t in tools
+            if TOOL_CAPABILITY.get(t.name) is None or TOOL_CAPABILITY[t.name] in granted
+        ]
 
 
 class AuditLoggingMiddleware(Middleware):
@@ -50,7 +61,7 @@ class AuditLoggingMiddleware(Middleware):
         finally:
             if user_id:
                 # Off the event loop, and never allowed to raise: an exception here
-                # would replace the tool's real result (e.g. a send_email that
+                # would replace the tool's real result (e.g. an email_send that
                 # already went out would look failed, and the agent might resend).
                 try:
                     await anyio.to_thread.run_sync(

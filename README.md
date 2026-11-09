@@ -25,20 +25,25 @@ MCP client ──OAuth 2.1──▶ frontend (SvelteKit + Better Auth)   issues 
 | Part | Stack | Role |
 |---|---|---|
 | `frontend/` | SvelteKit, Svelte 5, Tailwind v4, shadcn-svelte, Better Auth | Sign-in, OAuth authorization server, dashboard |
-| `backend/` | FastAPI, FastMCP, SQLAlchemy, Alembic | MCP resource server at `/mcp/email`, REST API for the dashboard |
+| `backend/` | FastAPI, FastMCP, SQLAlchemy, Alembic | MCP resource server at `/mcp`, REST API for the dashboard |
 | Postgres | — | Users and sessions (Better Auth), connections, permissions, audit log |
 
 ## MCP tools
 
+One endpoint, `/mcp`, serves every service. Tools are named `<service>_<action>`.
+
 | Tool | Capability |
 |---|---|
-| `list_folders`, `list_emails`, `read_email`, `get_attachment` | `email.read` |
-| `search_emails` | `email.search` |
-| `draft_email` | `email.draft` |
-| `send_email` | `email.send` |
-| `mark_emails_seen` | `email.mark_seen` |
+| `list_accounts` | none (lists the user's accounts and what each allows) |
+| `email_list_folders`, `email_list`, `email_read`, `email_get_attachment` | `email.read` |
+| `email_search` | `email.search` |
+| `email_draft` | `email.draft` |
+| `email_send` | `email.send` |
+| `email_mark_seen` | `email.mark_seen` |
 
-Each connected account has its own set of granted capabilities, managed on the dashboard.
+Each connected account has its own set of granted capabilities, managed on the dashboard; all are off by default. An agent only sees the tools at least one of the user's accounts allows.
+
+Every tool takes an `account` argument. With one account per service it can be left out. With several, it is required and never guessed: a call without it fails and lists the choices, so an agent can't act on the wrong account by accident.
 
 ## Local development
 
@@ -61,7 +66,7 @@ uv run fastapi dev main.py
 ```
 
 Then sign up at http://localhost:5173, connect a mailbox, and add
-`http://localhost:8000/mcp/email` as a custom connector in your MCP client.
+`http://localhost:8000/mcp` as a custom connector in your MCP client.
 
 Generate secrets with:
 

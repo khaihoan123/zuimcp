@@ -18,7 +18,7 @@
 	}
 }
 
-# Resource server: /mcp/email plus its protected-resource metadata. Kept on its
+# Resource server: /mcp plus its protected-resource metadata. Kept on its
 # own domain so both live at the root path, matching what FastMCP computes
 # internally from MCP_PATH.
 {$MCP_DOMAIN} {

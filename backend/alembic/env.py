@@ -14,7 +14,7 @@ load_dotenv()
 config = context.config
 
 db_url = os.environ["DATABASE_URL"]
-# psycopg2 (sync) is fine for migrations even if the app uses an async driver.
+# A plain postgresql:// URL uses the psycopg (v3) driver in SQLAlchemy 2.1+.
 config.set_main_option("sqlalchemy.url", db_url)
 
 if config.config_file_name is not None:

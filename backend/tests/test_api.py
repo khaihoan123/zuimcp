@@ -170,8 +170,8 @@ def test_audit_log_shows_only_own_entries(db):
     bob = make_user("bob")
     db.add_all(
         [
-            AuditLog(user_id=alice, tool_name="list_emails", status="success"),
-            AuditLog(user_id=bob, tool_name="send_email", status="success"),
+            AuditLog(user_id=alice, tool_name="email_list", status="success"),
+            AuditLog(user_id=bob, tool_name="email_send", status="success"),
         ]
     )
     db.commit()
@@ -179,13 +179,13 @@ def test_audit_log_shows_only_own_entries(db):
     res = logged_in(alice).get("/api/audit-log")
 
     assert res.status_code == 200
-    assert [e["tool_name"] for e in res.json()] == ["list_emails"]
+    assert [e["tool_name"] for e in res.json()] == ["email_list"]
 
 
 @pytest.mark.parametrize("limit, expected", [(-5, 1), (0, 1), (2, 2), (1000, 3)])
 def test_audit_log_limit_is_clamped(db, limit, expected):
     alice = make_user("alice")
-    db.add_all([AuditLog(user_id=alice, tool_name="list_emails", status="success") for _ in range(3)])
+    db.add_all([AuditLog(user_id=alice, tool_name="email_list", status="success") for _ in range(3)])
     db.commit()
 
     res = logged_in(alice).get(f"/api/audit-log?limit={limit}")

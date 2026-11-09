@@ -10,12 +10,12 @@ SMTP_PORT: 587
 # issue or manage identity itself.
 AUTH_ISSUER: "http://localhost:5173/auth"
 AUTH_JWKS_URI: "http://localhost:5173/auth/jwks"
-# Bare origin of this server — NOT the resource identifier (see main.py's
-# RESOURCE_INDICATOR, which appends MCP_PATH and must match
+# Bare origin of this server — NOT the resource identifier (see
+# RESOURCE_INDICATOR in core/mcp_server.py, which appends MCP_PATH and must match
 # MCP_RESOURCE_INDICATOR in frontend/.env).
 MCP_RESOURCE_URL: "http://localhost:8000"
 # Max MCP tool calls per user per minute, enforced by a sliding-window
-# middleware in services/email/service.py. Guards against a runaway agent loop.
+# middleware in core/mcp_server.py. Guards against a runaway agent loop.
 MCP_RATE_LIMIT_PER_MINUTE: 60
 
 # SSRF guard (core/net.py): refuse mail servers on private/internal addresses.

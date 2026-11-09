@@ -1,28 +1,18 @@
 import smtplib
 from email.message import Message
 
-from core.config import LOCAL_EMAIL, LOCAL_PASS, config
 from core.net import MAIL_CONNECT_TIMEOUT, ensure_public_host
-from services.email.providers.imap import _resolve_connection
 
 
-def _resolve_smtp_credentials(user_id: str | None, account: str | None, capability: str) -> dict:
-    if user_id:
-        return _resolve_connection(user_id, account, capability)
-    if not LOCAL_EMAIL or not LOCAL_PASS:
-        raise ValueError("Local credentials missing in .env (stdio mode)")
-    return {
-        "smtp_host": config["SMTP_HOST"],
-        "smtp_port": config.get("SMTP_PORT", 587),
-        "email": LOCAL_EMAIL,
-        "password": LOCAL_PASS,
-    }
-
-
-def send_message(user_id: str | None, msg: Message, account: str | None = None) -> None:
-    creds = _resolve_smtp_credentials(user_id, account, capability="email.send")
+# TODO: SMTP logs in with the same email/password as IMAP, which fits cPanel-style
+# hosting (one login for both). Later, add an optional separate SMTP username and
+# password (connect form + api/connections.py + here) so users can send through
+# another server, e.g. Gmail SMTP, Amazon SES, SendGrid, while reading over IMAP.
+def send_message(creds: dict, msg: Message) -> None:
+    """Send through the account in `creds` — the same credentials the caller
+    used for the From header, so sender and mailbox can never disagree."""
     smtp_port = creds.get("smtp_port", 587)
-    if user_id:
+    if not creds["local"]:
         ensure_public_host(creds["smtp_host"], smtp_port)
     with smtplib.SMTP(creds["smtp_host"], smtp_port, timeout=MAIL_CONNECT_TIMEOUT) as smtp:
         smtp.starttls()

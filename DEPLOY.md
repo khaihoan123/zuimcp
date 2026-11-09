@@ -16,7 +16,7 @@ Two domains, both A records to the server:
 
 - `APP_DOMAIN` — dashboard, marketing, `/auth/*`, `/oauth2/*`, and `/api/*`
   (Caddy proxies `/api/*` to the backend, replacing Vite's dev proxy).
-- `MCP_DOMAIN` — `/mcp/email` and its protected-resource metadata.
+- `MCP_DOMAIN` — `/mcp` and its protected-resource metadata.
 
 They are separate because both SvelteKit's OAuth discovery documents and
 FastMCP's metadata must sit at their domain's root path.

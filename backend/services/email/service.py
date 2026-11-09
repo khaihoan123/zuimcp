@@ -1,3 +1,5 @@
+"""Email tools (IMAP/SMTP today). Registered on the shared server in core.mcp_server."""
+
 import base64
 import datetime
 import email.utils
@@ -5,54 +7,14 @@ import json
 import re
 from email.mime.text import MIMEText
 
-from fastmcp import Context, FastMCP
-from fastmcp.server.auth import RemoteAuthProvider
-from fastmcp.server.auth.providers.jwt import JWTVerifier
-from fastmcp.server.middleware.rate_limiting import SlidingWindowRateLimitingMiddleware
+from fastmcp import Context
 from imap_tools import AND, MailMessageFlags
 from mcp.types import ImageContent, TextContent
 
-from core.config import config
 from core.mcp_auth import get_user_id as _get_user_id
-from core.middleware import AuditLoggingMiddleware
-from services.email.providers.imap import get_mailbox, get_connected_email
+from core.mcp_server import service_tool
+from services.email.providers.imap import get_email_credentials, get_mailbox, open_mailbox
 from services.email.providers.smtp import send_message
-
-MCP_PATH = "/mcp/email"
-MCP_RESOURCE_URL = config.get("MCP_RESOURCE_URL", "http://localhost:8000")
-BETTER_AUTH_ISSUER = config.get("AUTH_ISSUER")
-
-# The full protected-resource identifier (RFC 8707/9728) — what an MCP
-# client sends as its "resource" param and gets back as the token's `aud`
-# claim. Must exactly equal validAudiences in frontend/src/lib/server/auth.ts,
-# or Better Auth rejects the token request ("requested resource invalid") —
-# or worse, silently issues an opaque non-JWT access_token instead.
-RESOURCE_INDICATOR = MCP_RESOURCE_URL.rstrip("/") + MCP_PATH
-
-token_verifier = JWTVerifier(
-    jwks_uri=config.get("AUTH_JWKS_URI"),
-    issuer=BETTER_AUTH_ISSUER,
-    audience=RESOURCE_INDICATOR,
-    algorithm="RS256",
-)
-
-auth = RemoteAuthProvider(
-    token_verifier=token_verifier,
-    authorization_servers=[BETTER_AUTH_ISSUER],
-    base_url=MCP_RESOURCE_URL,
-)
-mcp = FastMCP("ZuiMCP", auth=auth)
-
-# Added first so it's outermost and also observes/logs RateLimitError raised by
-# the rate limiter below (FastMCP.add_middleware appends; first added = outermost).
-mcp.add_middleware(AuditLoggingMiddleware())
-mcp.add_middleware(
-    SlidingWindowRateLimitingMiddleware(
-        max_requests=config.get("MCP_RATE_LIMIT_PER_MINUTE", 60),
-        window_minutes=1,
-        get_client_id=lambda ctx: _get_user_id(ctx.fastmcp_context) or "anonymous",
-    )
-)
 
 
 def _snippet(msg, length: int = 200) -> str:
@@ -62,9 +24,9 @@ def _snippet(msg, length: int = 200) -> str:
     text = re.sub(r"\s+", " ", text).strip()  # collapse whitespace
     return text[:length]
 
-def _fetch_messages(user_id: str | None, folder: str, criteria, limit=20, offset=0,
+def _fetch_messages(user_id: str | None, account: str, folder: str, criteria, limit=20, offset=0,
                     with_snippet=False, *, capability: str) -> list[dict]:
-    """Shared fetch used by list_emails and search_emails.
+    """Shared fetch used by email_list and email_search.
 
     Returns newest-first. Uses UID search to get all matching UIDs,
     applies offset and limit to the UIDs, and then fetches only the
@@ -74,7 +36,7 @@ def _fetch_messages(user_id: str | None, folder: str, criteria, limit=20, offset
     forgetting it should be an error, not a silently ungated read.
     """
     results = []
-    with get_mailbox(user_id, capability=capability) as mailbox:
+    with get_mailbox(user_id, account, capability) as mailbox:
         mailbox.folder.set(folder)
         
         criteria_str = str(criteria)
@@ -131,23 +93,30 @@ def _resolve_drafts_folder(mailbox) -> str:
 
 
 
-@mcp.tool()
-def list_folders(ctx: Context) -> list[str]:
-    """List all available IMAP folders (e.g., INBOX, INBOX.Drafts, etc.). Use this to find the exact folder name to use for other tools."""
+# Gated on email.read: folder names are user data (clients, projects),
+# not neutral metadata, and listing them is only useful before a read.
+@service_tool(capability="email.read")
+def email_list_folders(ctx: Context, account: str = "") -> list[str]:
+    """List all folders of a mailbox (e.g. INBOX, INBOX.Drafts). Use this to find the exact folder name for other email tools.
+
+    Args:
+        account: which mailbox to use — an `account` value or name from list_accounts.
+            Required when the user has more than one mailbox.
+    """
     user_id = _get_user_id(ctx)
-    # Gated on email.read: folder names are user data (clients, projects),
-    # not neutral metadata, and listing them is only useful before a read.
-    with get_mailbox(user_id, capability="email.read") as mailbox:
+    with get_mailbox(user_id, account, "email.read") as mailbox:
         return [f.name for f in mailbox.folder.list()]
 
-@mcp.tool()
-def list_emails(ctx: Context, folder: str = "INBOX", limit: int = 20, offset: int = 0,
+@service_tool(capability="email.read")
+def email_list(ctx: Context, account: str = "", folder: str = "INBOX", limit: int = 20, offset: int = 0,
                 unseen_only: bool = False, with_snippet: bool = False,
                 since: str = "", before: str = "") -> list[dict]:
     """List emails from a folder, newest first.
 
     Args:
-        folder: IMAP folder name (see list_folders).
+        account: which mailbox to use — an `account` value or name from list_accounts.
+            Required when the user has more than one mailbox.
+        folder: IMAP folder name (see email_list_folders).
         limit: max messages to return.
         offset: skip this many of the newest messages, for paging past `limit`
             (e.g. limit=20, offset=20 returns the next 20).
@@ -170,14 +139,21 @@ def list_emails(ctx: Context, folder: str = "INBOX", limit: int = 20, offset: in
         conditions["date_lt"] = datetime.date.fromisoformat(before)
     criteria = AND(**conditions) if conditions else AND(all=True)
 
-    return _fetch_messages(user_id, folder, criteria, limit=limit, offset=offset,
+    return _fetch_messages(user_id, account, folder, criteria, limit=limit, offset=offset,
                           with_snippet=with_snippet, capability="email.read")
 
-@mcp.tool()
-def read_email(ctx: Context, uid: str, folder: str = "INBOX") -> dict:
-    """Read a single email by UID. Returns full headers, plain text body, and attachment names."""
+@service_tool(capability="email.read")
+def email_read(ctx: Context, uid: str, folder: str = "INBOX", account: str = "") -> dict:
+    """Read a single email by UID. Returns full headers, plain text body, and attachment names.
+
+    Args:
+        uid: the email's uid, from email_list or email_search.
+        folder: the folder it is in.
+        account: which mailbox to use — an `account` value or name from list_accounts.
+            Required when the user has more than one mailbox.
+    """
     user_id = _get_user_id(ctx)
-    with get_mailbox(user_id, capability="email.read") as mailbox:
+    with get_mailbox(user_id, account, "email.read") as mailbox:
         mailbox.folder.set(folder)
         msgs = list(mailbox.fetch(AND(uid=uid), mark_seen=False))
         if not msgs:
@@ -203,16 +179,18 @@ def read_email(ctx: Context, uid: str, folder: str = "INBOX") -> dict:
             ],
         }
 
-@mcp.tool()
-def get_attachment(ctx: Context, uid: str, folder: str = "INBOX", index: int = -1, content_id: str = ""):
+# No separate attachments capability exists yet, so this rides on read.
+@service_tool(capability="email.read")
+def email_get_attachment(ctx: Context, uid: str, folder: str = "INBOX", index: int = -1,
+                         content_id: str = "", account: str = ""):
     """Get an attachment (or all attachments) from an email.
     Pass `content_id` or `index` to select one attachment.
     Pass neither to return ALL attachments at once.
     Images are returned natively so the AI can see them. Non-images return base64 text.
+    `account` works as in email_read.
     """
     user_id = _get_user_id(ctx)
-    # No separate attachments capability exists yet, so this rides on read.
-    with get_mailbox(user_id, capability="email.read") as mailbox:
+    with get_mailbox(user_id, account, "email.read") as mailbox:
         mailbox.folder.set(folder)
         msgs = list(mailbox.fetch(AND(uid=uid), mark_seen=False))
         if not msgs:
@@ -258,19 +236,21 @@ def get_attachment(ctx: Context, uid: str, folder: str = "INBOX", index: int = -
 
         return results if len(results) > 1 or not target else results[0]
 
-@mcp.tool()
-def search_emails(ctx: Context, query: str = "", subject: str = "", sender: str = "",
+@service_tool(capability="email.search")
+def email_search(ctx: Context, account: str = "", query: str = "", subject: str = "", sender: str = "",
                   folder: str = "INBOX", limit: int = 20, offset: int = 0,
                   unseen_only: bool = False, with_snippet: bool = False,
                   since: str = "", before: str = "") -> list[dict]:
     """Search emails by free text, subject, or sender, newest first.
 
     Args:
+        account: which mailbox to use — an `account` value or name from list_accounts.
+            Required when the user has more than one mailbox.
         query: free-text search across the message.
         subject: match within the subject.
         sender: match the From address.
         folder, limit, offset, unseen_only, with_snippet, since, before:
-            same meaning as in list_emails.
+            same meaning as in email_list.
 
     Returns sender, subject, date, uid, seen status, and (optionally) a snippet.
     """
@@ -290,23 +270,35 @@ def search_emails(ctx: Context, query: str = "", subject: str = "", sender: str 
         kwargs["date_lt"] = datetime.date.fromisoformat(before)
     criteria = AND(**kwargs) if kwargs else AND(all=True)
 
-    return _fetch_messages(user_id, folder, criteria, limit=limit, offset=offset,
+    return _fetch_messages(user_id, account, folder, criteria, limit=limit, offset=offset,
                           with_snippet=with_snippet, capability="email.search")
 
-@mcp.tool()
-def draft_email(ctx: Context, to: str, subject: str, body: str, cc: str = "") -> dict:
-    """Save a draft email to the Drafts folder. SMTP submission is skipped — draft is appended to the Drafts IMAP folder."""
-    user_id = _get_user_id(ctx)
+def _build_message(sender: str, to: str, subject: str, body: str, cc: str) -> MIMEText:
     msg = MIMEText(body, "plain", "utf-8")
-    msg["From"] = get_connected_email(user_id, capability="email.draft")
+    msg["From"] = sender
     msg["To"] = to
     if cc:
         msg["Cc"] = cc
     msg["Subject"] = subject
     msg["Date"] = email.utils.formatdate(localtime=True)
     msg["Message-ID"] = email.utils.make_msgid()
+    return msg
 
-    with get_mailbox(user_id, capability="email.draft") as mailbox:
+
+@service_tool(capability="email.draft")
+def email_draft(ctx: Context, to: str, subject: str, body: str, cc: str = "", account: str = "") -> dict:
+    """Save a draft email in the mailbox's Drafts folder. Nothing is sent.
+
+    Args:
+        account: which mailbox to save the draft in — an `account` value or name
+            from list_accounts. Required when the user has more than one mailbox.
+    """
+    # One lookup for both the From header and the mailbox written to, so they
+    # are always the same account.
+    creds = get_email_credentials(_get_user_id(ctx), account, "email.draft")
+    msg = _build_message(creds["email"], to, subject, body, cc)
+
+    with open_mailbox(creds) as mailbox:
         drafts_folder = _resolve_drafts_folder(mailbox)
         mailbox.append(
             msg.as_bytes(),
@@ -317,53 +309,58 @@ def draft_email(ctx: Context, to: str, subject: str, body: str, cc: str = "") ->
 
     return {
         "status": "draft_saved",
+        "account": creds["account_name"],
+        "from": creds["email"],
         "folder": drafts_folder,
         "to": to,
         "subject": subject,
     }
 
-@mcp.tool()
-def send_email(ctx: Context, to: str, subject: str, body: str, cc: str = "") -> dict:
-    """Send an email immediately via SMTP. Requires the email.send capability
-    on the connected account — unlike the other tools here, this is
-    irreversible, so an account without that capability granted raises
-    instead of silently falling back to one that has it."""
-    user_id = _get_user_id(ctx)
-    msg = MIMEText(body, "plain", "utf-8")
-    msg["From"] = get_connected_email(user_id, capability="email.send")
-    msg["To"] = to
-    if cc:
-        msg["Cc"] = cc
-    msg["Subject"] = subject
-    msg["Date"] = email.utils.formatdate(localtime=True)
-    msg["Message-ID"] = email.utils.make_msgid()
 
-    send_message(user_id, msg)
+@service_tool(capability="email.send")
+def email_send(ctx: Context, to: str, subject: str, body: str, cc: str = "", account: str = "") -> dict:
+    """Send an email immediately. This cannot be undone.
+
+    Args:
+        account: which mailbox to send FROM — an `account` value or name from
+            list_accounts. Required when the user has more than one mailbox. It is
+            never guessed, so confirm with the user if it isn't clear.
+    """
+    creds = get_email_credentials(_get_user_id(ctx), account, "email.send")
+    msg = _build_message(creds["email"], to, subject, body, cc)
+    send_message(creds, msg)
 
     return {
         "status": "sent",
+        "account": creds["account_name"],
+        "from": creds["email"],
         "to": to,
         "subject": subject,
     }
 
-@mcp.tool()
-def mark_emails_seen(ctx: Context, uids: list[str], folder: str = "INBOX", seen: bool = True) -> dict:
+
+@service_tool(capability="email.mark_seen")
+def email_mark_seen(ctx: Context, uids: list[str], folder: str = "INBOX", seen: bool = True,
+                    account: str = "") -> dict:
     """Mark multiple emails as read (seen) or unread.
 
     Args:
         uids: A list of email UIDs to modify.
-        folder: The IMAP folder where the emails are located (default: INBOX).
+        folder: The folder where the emails are located (default: INBOX).
         seen: True to mark as read, False to mark as unread.
+        account: which mailbox to use — an `account` value or name from list_accounts.
+            Required when the user has more than one mailbox.
     """
-    user_id = _get_user_id(ctx)
-    with get_mailbox(user_id, capability="email.mark_seen") as mailbox:
+    creds = get_email_credentials(_get_user_id(ctx), account, "email.mark_seen")
+    with open_mailbox(creds) as mailbox:
         mailbox.folder.set(folder)
         if uids:
             mailbox.flag(uids, MailMessageFlags.SEEN, seen)
-        
+
     return {
         "status": "success",
+        "account": creds["account_name"],
         "uids": uids,
         "folder": folder,
-        "seen": seen
+        "seen": seen,
     }

@@ -63,11 +63,6 @@ export type ServiceCategory = {
 	label: string;
 	description: string;
 	connectors: Connector[];
-	/**
-	 * Each service gets its OWN MCP server and endpoint (/mcp/email, /mcp/odoo …) —
-	 * there is no single endpoint covering everything. False until that service ships.
-	 */
-	hasEndpoint: boolean;
 };
 
 export const serviceCategories: ServiceCategory[] = [
@@ -75,7 +70,6 @@ export const serviceCategories: ServiceCategory[] = [
 		id: 'email',
 		label: 'Email',
 		description: 'Mailboxes your agent can read, search and draft in.',
-		hasEndpoint: true,
 		connectors: [
 			{
 				id: 'imap',
@@ -107,7 +101,6 @@ export const serviceCategories: ServiceCategory[] = [
 		id: 'erp',
 		label: 'ERPs',
 		description: 'Orders, contacts and inventory from your business system.',
-		hasEndpoint: false,
 		connectors: [
 			{
 				id: 'erp',
