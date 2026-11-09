@@ -13,7 +13,7 @@ well_known_routes = auth.get_well_known_routes(mcp_path=MCP_PATH)
 # lifespan=mcp_app.lifespan is required for FastMCP's streamable-http
 # transport to start its session manager; omitting it breaks /mcp at
 # request time even though the app appears to start fine.
-app = FastAPI(title="MCP Platform Backend", lifespan=mcp_app.lifespan)
+app = FastAPI(title="ZuiMCP Backend", lifespan=mcp_app.lifespan)
 app.router.routes.extend(well_known_routes)
 
 

@@ -1,4 +1,4 @@
-# mcp-imap
+# ZuiMCP
 
 Give AI agents (Claude, n8n, any MCP client) safe access to your email, with you
 deciding exactly what each agent may do.

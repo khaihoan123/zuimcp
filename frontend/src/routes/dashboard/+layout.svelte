@@ -2,6 +2,7 @@
 	import { page } from '$app/state';
 	import { goto, invalidateAll } from '$app/navigation';
 	import { authClient } from '$lib/auth-client';
+	import { SITE_NAME } from '$lib/config';
 	import HistoryIcon from '@lucide/svelte/icons/history';
 	import LayoutDashboardIcon from '@lucide/svelte/icons/layout-dashboard';
 	import LogOutIcon from '@lucide/svelte/icons/log-out';
@@ -49,7 +50,7 @@
 						<path d="M4 7h16M4 12h10M4 17h7" stroke-linecap="round" />
 					</svg>
 				</span>
-				MCP Platform
+				{SITE_NAME}
 			</a>
 			<div class="flex-1"></div>
 

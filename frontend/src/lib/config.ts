@@ -3,7 +3,7 @@
  * connector catalogue. The brand name lives here so renaming the platform is a
  * one-line change.
  */
-export const SITE_NAME = 'MCP Platform';
+export const SITE_NAME = 'ZuiMCP';
 export const SITE_TAGLINE = 'Controlled access to your tools, for AI agents.';
 
 export type Availability = 'available' | 'soon';

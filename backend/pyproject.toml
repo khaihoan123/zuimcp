@@ -1,7 +1,7 @@
 [project]
-name = "mcp-imap"
+name = "zuimcp"
 version = "0.1.0"
-description = "Email MCP server — IMAP/SMTP bridge for Claude and n8n"
+description = "ZuiMCP backend — MCP server and API giving AI agents permission-controlled access to email"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

@@ -41,7 +41,7 @@ auth = RemoteAuthProvider(
     authorization_servers=[BETTER_AUTH_ISSUER],
     base_url=MCP_RESOURCE_URL,
 )
-mcp = FastMCP("mail_mcp", auth=auth)
+mcp = FastMCP("ZuiMCP", auth=auth)
 
 # Added first so it's outermost and also observes/logs RateLimitError raised by
 # the rate limiter below (FastMCP.add_middleware appends; first added = outermost).
