@@ -1,4 +1,4 @@
-"""Talking to an Odoo server over HTTP, for Odoo 17, 18 and 19+.
+"""Talking to an Odoo server over HTTP, for Odoo 8 to 19+.
 
 Two API styles, picked from the server version when the account is connected:
 
@@ -6,9 +6,17 @@ Two API styles, picked from the server version when the account is connected:
   token, the database in the X-Odoo-Database header, and the method's keyword
   arguments as the JSON body ("ids" for record methods). See
   odoo/addons/rpc/controllers/json2.py in Odoo 19.
-- "jsonrpc" (Odoo 17/18): the classic external API, POST /jsonrpc with
+- "jsonrpc" (Odoo 8 to 18): the classic external API, POST /jsonrpc with
   common.authenticate once (login + API key -> uid), then object.execute_kw.
   Odoo 19 still has it but deprecates it (removal planned for Odoo 22).
+  API keys exist since Odoo 14; on 8-13 the "key" is the user's password.
+
+Old versions differ in a few calls, handled below with `self.major`:
+create() takes one dict everywhere (a list only works from 12),
+search_count() takes the domain by position (named `args` on 8-11),
+read_group() has "field:agg" aggregates only from 12, and ir.model's
+"is transient" field is `osv_memory` on 8/9. Checked against the 8.0-17.0
+sources on github.com/odoo/odoo and the local 18/19 sources.
 
 Only the handful of ORM methods the tools need are exposed here — there is
 deliberately no "call any method" entry point.
@@ -29,7 +37,10 @@ from core.net import MAIL_CONNECT_TIMEOUT, ensure_public_host
 
 # Odoo 19 is the first release with the JSON-2 API.
 JSON2_MIN_VERSION = 19
-OLDEST_SUPPORTED_VERSION = 17
+# Odoo 8 is the first with /jsonrpc and search_read; 7 and older (OpenERP) differ.
+OLDEST_SUPPORTED_VERSION = 8
+# Before 12, read_group can't pick the aggregate function per field.
+READ_GROUP_AGG_MIN_VERSION = 12
 
 # Seconds. Connecting is quick or broken; a big search_read can take a while.
 TIMEOUT = httpx.Timeout(60, connect=MAIL_CONNECT_TIMEOUT)
@@ -48,8 +59,8 @@ AGGREGATE_SPEC = re.compile(r"^[a-z0-9_]+:(sum|avg|min|max|count|count_distinct)
 # Since Odoo 18 API keys expire, and Odoo's "New API Key" dialog preselects
 # 1 day — so an expired key is the most likely reason a working account stops.
 AUTH_FAILED = (
-    "Odoo refused the API key. Keys can expire (Odoo 18 and newer): create a new "
-    "one in Odoo and reconnect this account in the ZuiMCP dashboard."
+    "Odoo refused the API key or password. Keys can expire (Odoo 18 and newer): "
+    "create a new one in Odoo and reconnect this account in the ZuiMCP dashboard."
 )
 
 _request_ids = itertools.count(1)
@@ -152,7 +163,7 @@ def detect_version(base_url: str) -> tuple[int, str]:
     """(major, version string) of the server, e.g. (19, '19.0').
 
     /web/webclient/version_info is served by the always-installed `web` module
-    with auth="none" on 17, 18 and 19, so it needs neither a database nor a
+    with auth="none" on every version from 8 to 19, so it needs neither a database nor a
     login. Its server_version_info is release.version_info, e.g.
     [19, 0, 0, 'final', 0, 'e']; Odoo Online "saas~18.3" reports major 18.
     """
@@ -170,7 +181,7 @@ class OdooClient:
     from_credentials() (a stored one)."""
 
     def __init__(self, url: str, database: str, login: str, api_key: str, api_style: str,
-                 uid: int | None = None):
+                 uid: int | None = None, major: int | None = None):
         if api_style not in ("json2", "jsonrpc"):
             raise ValueError(f"Unknown Odoo API style '{api_style}'")
         self.url = url
@@ -179,6 +190,8 @@ class OdooClient:
         self.api_key = api_key
         self.api_style = api_style
         self.uid = uid
+        # Unknown (older stored credentials) -> assume a current release.
+        self.major = major or (JSON2_MIN_VERSION if api_style == "json2" else 18)
 
     @classmethod
     def from_credentials(cls, creds: dict) -> "OdooClient":
@@ -189,6 +202,7 @@ class OdooClient:
             api_key=creds["api_key"],
             api_style=creds["api_style"],
             uid=creds.get("uid"),
+            major=creds.get("major"),
         )
 
     @classmethod
@@ -200,7 +214,7 @@ class OdooClient:
         if major < OLDEST_SUPPORTED_VERSION:
             raise OdooVersionError(f"Odoo {version} is not supported (Odoo {OLDEST_SUPPORTED_VERSION} or newer is needed)")
         api_style = "json2" if major >= JSON2_MIN_VERSION else "jsonrpc"
-        client = cls(url, database, login, api_key, api_style)
+        client = cls(url, database, login, api_key, api_style, major=major)
         client.authenticate()
         creds = {
             "url": url,
@@ -209,6 +223,7 @@ class OdooClient:
             "api_key": api_key,
             "uid": client.uid,
             "version": version,
+            "major": major,
             "api_style": api_style,
         }
         return client, creds
@@ -296,12 +311,22 @@ class OdooClient:
             return self._json2(model, "fields_get", attributes=attributes)
         return self._execute_kw(model, "fields_get", [], {"attributes": attributes})
 
+    def list_models(self, search: str, offset: int, limit: int) -> list[dict]:
+        """Non-transient models, optionally matching `search` in name or label."""
+        transient = "transient" if self.major >= 10 else "osv_memory"
+        domain: list = [[transient, "=", False]]
+        if search:
+            domain = ["&", *domain, "|", ["model", "ilike", search], ["name", "ilike", search]]
+        return self.search_read("ir.model", domain, ["model", "name"], offset=offset,
+                                limit=limit, order="model")
+
     def create(self, model: str, values: dict) -> int:
         if self.api_style == "json2":
             ids = self._json2(model, "create", vals_list=[values])
         else:
-            ids = self._execute_kw(model, "create", [[values]])
-        # A list of values gives back a list of ids on both styles.
+            # One dict, not a list: lists only work from Odoo 12, and a dict
+            # gives back the new id on every version.
+            ids = self._execute_kw(model, "create", [values])
         return ids[0] if isinstance(ids, list) else ids
 
     def write(self, model: str, ids: list[int], values: dict) -> bool:
@@ -317,7 +342,7 @@ class OdooClient:
     def search_count(self, model: str, domain: list) -> int:
         if self.api_style == "json2":
             return self._json2(model, "search_count", domain=domain)
-        return self._execute_kw(model, "search_count", [], {"domain": domain})
+        return self._execute_kw(model, "search_count", [domain])
 
     def read_group(self, model: str, domain: list, groupby: list[str], aggregates: list[str],
                    limit: int | None = None, order: str | None = None) -> list[dict]:
@@ -325,9 +350,11 @@ class OdooClient:
         [{"partner_id": [3, "Azure"], "count": 2, "amount_total:sum": 100.0}, ...]
 
         Odoo 19 has formatted_read_group (read_group still exists but is
-        deprecated, and is gone in later versions). 17/18 only have read_group,
+        deprecated, and is gone in later versions). 12-18 only have read_group,
         whose aggregates are named "alias:agg(field)" so each comes back under
-        a key we chose; lazy=False groups by every field at once.
+        a key we chose; lazy=False groups by every field at once. 8-11 only
+        take plain field names and total each with the field's own function
+        (a sum for amounts), so only ":sum" is accepted there.
         """
         for spec in groupby:
             if not GROUPBY_SPEC.match(spec):
@@ -344,13 +371,20 @@ class OdooClient:
             rows = self._json2(model, "formatted_read_group", **kwargs)
             keys = {spec: spec for spec in aggregates}
         else:
-            keys = {spec: spec.replace(":", "__") for spec in aggregates}
-            fields = []
-            for spec, alias in keys.items():
-                field, agg = spec.split(":")
-                fields.append(f"{alias}:{agg}({field})")
-            for spec, alias in keys.items():
-                order = order.replace(spec, alias) if order else order
+            if self.major < READ_GROUP_AGG_MIN_VERSION:
+                for spec in aggregates:
+                    if not spec.endswith(":sum"):
+                        raise OdooError(f"Odoo {self.major} can only sum fields in groups, not '{spec}'")
+                keys = {spec: spec.split(":")[0] for spec in aggregates}
+                fields = list(keys.values())
+            else:
+                keys = {spec: spec.replace(":", "__") for spec in aggregates}
+                fields = []
+                for spec, alias in keys.items():
+                    field, agg = spec.split(":")
+                    fields.append(f"{alias}:{agg}({field})")
+            for spec, key in keys.items():
+                order = order.replace(spec, key) if order else order
             rows = self._execute_kw(
                 model, "read_group", [],
                 {"domain": domain, "fields": fields, "groupby": groupby, "limit": limit,

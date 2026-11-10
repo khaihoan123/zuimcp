@@ -77,12 +77,8 @@ def odoo_list_models(ctx: Context, search: str = "", limit: int = 50, offset: in
     Returns the technical `model` name (use it in the other odoo_ tools) and its label.
     """
     client, name = _client(ctx, account, "odoo.read")
-    domain: list = [["transient", "=", False]]
-    if search:
-        domain = ["&", *domain, "|", ["model", "ilike", search], ["name", "ilike", search]]
     limit = _limit(limit, 50)
-    rows = client.search_read("ir.model", domain, ["model", "name"], offset=offset,
-                              limit=limit + 1, order="model")
+    rows = client.list_models(search, offset=max(offset, 0), limit=limit + 1)
     return {
         "account": name,
         "models": [{"model": r["model"], "name": r["name"]} for r in rows[:limit]],

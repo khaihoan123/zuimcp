@@ -24,7 +24,7 @@ from core.security import decrypt_credentials
 SERVICE_TYPES: dict[str, tuple[str, ...]] = {
     "email": ("imap",),
 }
-# Odoo 17, 18 and 19 are all "odoo"; which API a server speaks is in its credentials.
+# Every Odoo version is "odoo"; which API a server speaks is in its credentials.
 SERVICE_TYPES["odoo"] = ("odoo",)
 
 

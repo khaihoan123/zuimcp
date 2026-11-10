@@ -220,7 +220,7 @@ def create_odoo_connection(
     if not (database and login and api_key):
         raise HTTPException(status_code=400, detail="Database, login and API key are all required")
 
-    # Detects the Odoo version (17/18 -> classic JSON-RPC, 19+ -> JSON-2) and
+    # Detects the Odoo version (8-18 -> classic JSON-RPC, 19+ -> JSON-2) and
     # checks the login before anything is stored. As with IMAP, errors shown to
     # the user stay generic so the form can't be used to probe other servers;
     # the real cause goes to the log.

@@ -44,7 +44,7 @@
 	 * providers that use the same base domain (mail.example.com for both). */
 	let smtpHostTouched = false;
 
-	/** Odoo 17/18/19 — the backend detects the version and picks the API. */
+	/** Odoo 8 to 19 — the backend detects the version and picks the API. */
 	let odooForm = $state({ display_name: '', url: '', database: '', login: '', api_key: '' });
 
 	let copied = $state(false);
@@ -306,7 +306,7 @@
 					/>
 				</div>
 				<div class="flex flex-col gap-1.5">
-					<Label for="odoo_api_key">API key</Label>
+					<Label for="odoo_api_key">API key (or password on Odoo 13 and older)</Label>
 					<Input
 						id="odoo_api_key"
 						type="password"
@@ -318,7 +318,8 @@
 						In Odoo: your avatar → My Profile (or Preferences) → Account Security → New API Key.
 						Pick a long <strong>Duration</strong> — Odoo preselects 1 day, and the connection stops
 						when the key expires. Administrators can choose Persistent Key; other users up to 3 months.
-						Your agent gets that Odoo user's access rights, limited further by what you allow here.
+						Odoo 13 and older have no API keys: use the password of an Odoo user made just for
+						your agent. Your agent gets that Odoo user's access rights, limited further by what you allow here.
 					</p>
 				</div>
 			{:else}

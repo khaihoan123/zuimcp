@@ -135,10 +135,11 @@ class FakeOdoo:
                 {"partner_id": [3, "Azure"], "amount_total:sum": 100.0, "__count": 2,
                  "__extra_domain": [["partner_id", "=", 3]]},
             ],
-            # Odoo 17/18 read_group(lazy=False): aggregates under their alias.
+            # Odoo 12-18 read_group(lazy=False): aggregates under their alias;
+            # 8-11 only take plain field names, so the key is the field.
             "read_group": [
-                {"partner_id": [3, "Azure"], "amount_total__sum": 100.0, "__count": 2,
-                 "__domain": [["partner_id", "=", 3]]},
+                {"partner_id": [3, "Azure"], "__count": 2, "__domain": [["partner_id", "=", 3]],
+                 ("amount_total__sum" if self.major >= 12 else "amount_total"): 100.0},
             ],
         }[method]
 
@@ -159,7 +160,7 @@ def fake_odoo(monkeypatch, major: int) -> FakeOdoo:
 def credentials(major: int) -> dict:
     return {
         "url": URL, "database": DB, "login": LOGIN, "api_key": KEY, "uid": 7,
-        "version": f"{major}.0", "api_style": "json2" if major >= 19 else "jsonrpc",
+        "version": f"{major}.0", "major": major, "api_style": "json2" if major >= 19 else "jsonrpc",
     }
 
 
@@ -187,7 +188,10 @@ def make_odoo_connection(user_id, name="Shop", granted=(), major=19, url=URL) ->
 # --- version detection and login --------------------------------------------
 
 
-@pytest.mark.parametrize("major, style", [(17, "jsonrpc"), (18, "jsonrpc"), (19, "json2"), (20, "json2")])
+@pytest.mark.parametrize("major, style", [
+    (8, "jsonrpc"), (11, "jsonrpc"), (12, "jsonrpc"), (13, "jsonrpc"), (14, "jsonrpc"),
+    (17, "jsonrpc"), (18, "jsonrpc"), (19, "json2"), (20, "json2"),
+])
 def test_connect_picks_api_style_from_version(monkeypatch, no_dns, major, style):
     fake_odoo(monkeypatch, major)
 
@@ -198,8 +202,8 @@ def test_connect_picks_api_style_from_version(monkeypatch, no_dns, major, style)
 
 
 def test_old_odoo_is_refused(monkeypatch, no_dns):
-    fake_odoo(monkeypatch, 16)
-    with pytest.raises(OdooVersionError, match="16.0 is not supported"):
+    fake_odoo(monkeypatch, 7)  # OpenERP 7 and older have a different API
+    with pytest.raises(OdooVersionError, match="7.0 is not supported"):
         OdooClient.connect(URL, DB, LOGIN, KEY)
 
 
@@ -267,8 +271,8 @@ def test_classic_request_format(monkeypatch, no_dns):
     assert fake.calls == [
         ("res.partner", "search_read", None, [], {"domain": [], "fields": ["name"], "offset": 0, "limit": 5}),
         ("res.partner", "read", [1, 2], [[1, 2]], {"fields": ["name"]}),
-        # create()'s values go positionally: call_kw checks args[0].
-        ("res.partner", "create", None, [[{"name": "Jane"}]], {}),
+        # One dict, positionally: works on every version (lists only from 12).
+        ("res.partner", "create", None, [{"name": "Jane"}], {}),
         ("res.partner", "write", [3], [[3], {"name": "Joan"}], {}),
         ("res.partner", "unlink", [4], [[4]], {}),
     ]
@@ -293,7 +297,8 @@ def test_count_and_read_group_request_formats(monkeypatch, no_dns):
     groups18 = client.read_group("sale.order", [], ["partner_id"], ["amount_total:sum"],
                                  limit=10, order="amount_total:sum desc")
     assert classic.calls == [
-        ("sale.order", "search_count", None, [], {"domain": [["state", "=", "sale"]]}),
+        # By position: the argument is named `args`, not `domain`, on Odoo 8-11.
+        ("sale.order", "search_count", None, [[["state", "=", "sale"]]], {}),
         # "alias:agg(field)" so the total comes back under a key we chose.
         ("sale.order", "read_group", None, [],
          {"domain": [], "fields": ["amount_total__sum:sum(amount_total)"], "groupby": ["partner_id"],
@@ -303,6 +308,37 @@ def test_count_and_read_group_request_formats(monkeypatch, no_dns):
     # Same answer shape on every version.
     expected = [{"partner_id": [3, "Azure"], "count": 2, "amount_total:sum": 100.0}]
     assert groups19 == groups18 == expected
+
+
+@pytest.mark.parametrize("major", [8, 11])
+def test_read_group_on_odoo_8_to_11_sums_plain_fields(monkeypatch, no_dns, major):
+    fake = fake_odoo(monkeypatch, major)
+    client = OdooClient.from_credentials(credentials(major))
+
+    groups = client.read_group("sale.order", [], ["partner_id"], ["amount_total:sum"],
+                               order="amount_total:sum desc")
+
+    assert fake.calls[-1][4]["fields"] == ["amount_total"]
+    assert fake.calls[-1][4]["orderby"] == "amount_total desc"
+    assert groups == [{"partner_id": [3, "Azure"], "count": 2, "amount_total:sum": 100.0}]
+    with pytest.raises(OdooError, match="can only sum"):
+        client.read_group("sale.order", [], ["partner_id"], ["amount_total:avg"])
+
+
+@pytest.mark.parametrize("major, field", [(8, "osv_memory"), (9, "osv_memory"), (10, "transient"), (19, "transient")])
+def test_list_models_uses_the_versions_transient_field(monkeypatch, no_dns, major, field):
+    fake = fake_odoo(monkeypatch, major)
+    OdooClient.from_credentials(credentials(major)).list_models("sale", offset=0, limit=10)
+    model, method, _, _, kwargs = fake.calls[-1]
+    assert (model, method) == ("ir.model", "search_read")
+    assert kwargs["domain"][1] == [field, "=", False]
+
+
+def test_stored_accounts_without_major_still_work(monkeypatch, no_dns):
+    # Credentials saved before `major` was stored.
+    fake_odoo(monkeypatch, 18)
+    creds = {k: v for k, v in credentials(18).items() if k != "major"}
+    assert OdooClient.from_credentials(creds).create("res.partner", {"name": "Jane"}) == 42
 
 
 @pytest.mark.parametrize("groupby, aggregates", [

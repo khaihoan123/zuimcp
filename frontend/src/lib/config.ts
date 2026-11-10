@@ -105,7 +105,7 @@ export const serviceCategories: ServiceCategory[] = [
 			{
 				id: 'odoo',
 				label: 'Odoo',
-				description: 'Odoo 17, 18 or 19 — Online, Odoo.sh or self-hosted, using an API key.',
+				description: 'Odoo 8 to 19 — Online, Odoo.sh or self-hosted, Community or Enterprise.',
 				availability: 'available',
 				icon: 'building',
 				accent: 'bg-amber-500/10 text-amber-600 dark:text-amber-400'
