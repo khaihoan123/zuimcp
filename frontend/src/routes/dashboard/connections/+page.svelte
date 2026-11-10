@@ -44,6 +44,9 @@
 	 * providers that use the same base domain (mail.example.com for both). */
 	let smtpHostTouched = false;
 
+	/** Odoo 17/18/19 — the backend detects the version and picks the API. */
+	let odooForm = $state({ display_name: '', url: '', database: '', login: '', api_key: '' });
+
 	let copied = $state(false);
 	let copyFailed = $state(false);
 
@@ -88,6 +91,7 @@
 			smtp_port: 587
 		};
 		smtpHostTouched = false;
+		odooForm = { display_name: '', url: '', database: '', login: '', api_key: '' };
 		dialogOpen = true;
 	}
 
@@ -106,10 +110,11 @@
 		addSubmitting = true;
 		addError = '';
 		try {
-			const res = await fetch('/api/connections/imap', {
+			const isOdoo = connecting?.id === 'odoo';
+			const res = await fetch(isOdoo ? '/api/connections/odoo' : '/api/connections/imap', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify(form)
+				body: JSON.stringify(isOdoo ? odooForm : form)
 			});
 			const body = await res.json();
 			if (!res.ok) throw new Error(body.detail ?? 'Could not connect');
@@ -257,64 +262,125 @@
 		</Dialog.Header>
 
 		<form class="flex flex-col gap-3" onsubmit={addConnection}>
-			<div class="flex flex-col gap-1.5">
-				<Label for="display_name">Display name</Label>
-				<Input
-					id="display_name"
-					type="text"
-					bind:value={form.display_name}
-					placeholder="Work inbox"
-					required
-				/>
-			</div>
-			<div class="flex gap-3">
-				<div class="flex flex-1 flex-col gap-1.5">
-					<Label for="host">IMAP host</Label>
+			{#if connecting?.id === 'odoo'}
+				<div class="flex flex-col gap-1.5">
+					<Label for="odoo_display_name">Display name</Label>
 					<Input
-						id="host"
+						id="odoo_display_name"
 						type="text"
-						value={form.host}
-						oninput={(e) => onHostInput(e.currentTarget.value)}
-						placeholder="mail.example.com"
+						bind:value={odooForm.display_name}
+						placeholder="Live Odoo"
 						required
 					/>
 				</div>
 				<div class="flex flex-col gap-1.5">
-					<Label for="port">Port</Label>
-					<Input id="port" type="number" bind:value={form.port} required class="w-24" />
-				</div>
-			</div>
-			<div class="flex gap-3">
-				<div class="flex flex-1 flex-col gap-1.5">
-					<Label for="smtp_host">SMTP host</Label>
+					<Label for="odoo_url">Odoo URL</Label>
 					<Input
-						id="smtp_host"
-						type="text"
-						value={form.smtp_host}
-						oninput={(e) => onSmtpHostInput(e.currentTarget.value)}
-						placeholder="mail.example.com"
+						id="odoo_url"
+						type="url"
+						bind:value={odooForm.url}
+						placeholder="https://mycompany.odoo.com"
 						required
 					/>
 				</div>
 				<div class="flex flex-col gap-1.5">
-					<Label for="smtp_port">Port</Label>
-					<Input id="smtp_port" type="number" bind:value={form.smtp_port} required class="w-24" />
+					<Label for="odoo_database">Database</Label>
+					<Input
+						id="odoo_database"
+						type="text"
+						bind:value={odooForm.database}
+						placeholder="mycompany"
+						required
+						autocomplete="off"
+					/>
 				</div>
-			</div>
-			<div class="flex flex-col gap-1.5">
-				<Label for="email">Email address</Label>
-				<Input id="email" type="email" bind:value={form.email} required autocomplete="off" />
-			</div>
-			<div class="flex flex-col gap-1.5">
-				<Label for="password">Password</Label>
-				<Input
-					id="password"
-					type="password"
-					bind:value={form.password}
-					required
-					autocomplete="off"
-				/>
-			</div>
+				<div class="flex flex-col gap-1.5">
+					<Label for="odoo_login">Login</Label>
+					<Input
+						id="odoo_login"
+						type="text"
+						bind:value={odooForm.login}
+						placeholder="you@example.com"
+						required
+						autocomplete="off"
+					/>
+				</div>
+				<div class="flex flex-col gap-1.5">
+					<Label for="odoo_api_key">API key</Label>
+					<Input
+						id="odoo_api_key"
+						type="password"
+						bind:value={odooForm.api_key}
+						required
+						autocomplete="off"
+					/>
+					<p class="text-xs text-muted-foreground">
+						In Odoo: your avatar → My Profile (or Preferences) → Account Security → New API Key.
+						Pick a long <strong>Duration</strong> — Odoo preselects 1 day, and the connection stops
+						when the key expires. Administrators can choose Persistent Key; other users up to 3 months.
+						Your agent gets that Odoo user's access rights, limited further by what you allow here.
+					</p>
+				</div>
+			{:else}
+				<div class="flex flex-col gap-1.5">
+					<Label for="display_name">Display name</Label>
+					<Input
+						id="display_name"
+						type="text"
+						bind:value={form.display_name}
+						placeholder="Work inbox"
+						required
+					/>
+				</div>
+				<div class="flex gap-3">
+					<div class="flex flex-1 flex-col gap-1.5">
+						<Label for="host">IMAP host</Label>
+						<Input
+							id="host"
+							type="text"
+							value={form.host}
+							oninput={(e) => onHostInput(e.currentTarget.value)}
+							placeholder="mail.example.com"
+							required
+						/>
+					</div>
+					<div class="flex flex-col gap-1.5">
+						<Label for="port">Port</Label>
+						<Input id="port" type="number" bind:value={form.port} required class="w-24" />
+					</div>
+				</div>
+				<div class="flex gap-3">
+					<div class="flex flex-1 flex-col gap-1.5">
+						<Label for="smtp_host">SMTP host</Label>
+						<Input
+							id="smtp_host"
+							type="text"
+							value={form.smtp_host}
+							oninput={(e) => onSmtpHostInput(e.currentTarget.value)}
+							placeholder="mail.example.com"
+							required
+						/>
+					</div>
+					<div class="flex flex-col gap-1.5">
+						<Label for="smtp_port">Port</Label>
+						<Input id="smtp_port" type="number" bind:value={form.smtp_port} required class="w-24" />
+					</div>
+				</div>
+				<div class="flex flex-col gap-1.5">
+					<Label for="email">Email address</Label>
+					<Input id="email" type="email" bind:value={form.email} required autocomplete="off" />
+				</div>
+				<div class="flex flex-col gap-1.5">
+					<Label for="password">Password</Label>
+					<Input
+						id="password"
+						type="password"
+						bind:value={form.password}
+						required
+						autocomplete="off"
+					/>
+				</div>
+			{/if}
 			{#if addError}
 				<p class="text-sm text-destructive">{addError}</p>
 			{/if}

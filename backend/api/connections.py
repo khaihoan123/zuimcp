@@ -12,6 +12,7 @@ from core.db import get_db
 from core.net import MAIL_CONNECT_TIMEOUT, UnsafeHostError, ensure_public_host
 from core.security import encrypt_credentials
 from models import Connection, Permission
+from services.odoo.client import OdooAuthError, OdooClient, OdooVersionError, host_and_port, normalize_url
 
 logger = logging.getLogger(__name__)
 
@@ -185,6 +186,72 @@ def update_permissions(
         if capability not in existing:
             raise HTTPException(status_code=400, detail=f"Unknown capability '{capability}'")
         existing[capability].allowed = allowed
+    db.commit()
+    db.refresh(connection)
+    return connection
+
+
+# --- Odoo ------------------------------------------------------------------
+
+DEFAULT_ODOO_CAPABILITIES = ["odoo.read", "odoo.create", "odoo.write", "odoo.delete"]
+
+
+class CreateOdooConnectionIn(BaseModel):
+    display_name: str = ""
+    url: str  # https://mycompany.odoo.com
+    database: str
+    login: str
+    api_key: str
+
+
+@router.post("/odoo", response_model=ConnectionOut, status_code=201)
+def create_odoo_connection(
+    body: CreateOdooConnectionIn,
+    user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    try:
+        url = normalize_url(body.url)
+        ensure_public_host(*host_and_port(url), what="Odoo server")
+    except ValueError as e:  # includes UnsafeHostError
+        raise HTTPException(status_code=400, detail=str(e))
+
+    database, login, api_key = body.database.strip(), body.login.strip(), body.api_key.strip()
+    if not (database and login and api_key):
+        raise HTTPException(status_code=400, detail="Database, login and API key are all required")
+
+    # Detects the Odoo version (17/18 -> classic JSON-RPC, 19+ -> JSON-2) and
+    # checks the login before anything is stored. As with IMAP, errors shown to
+    # the user stay generic so the form can't be used to probe other servers;
+    # the real cause goes to the log.
+    try:
+        _, credentials = OdooClient.connect(url, database, login, api_key)
+    except OdooVersionError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except OdooAuthError:
+        raise HTTPException(
+            status_code=400,
+            detail="Odoo login failed — check the database, login and API key (and that the key hasn't expired)",
+        )
+    except Exception:
+        logger.warning("Odoo connection test failed for %s", url, exc_info=True)
+        raise HTTPException(
+            status_code=400, detail="Could not connect to Odoo — check the URL and the database name"
+        )
+
+    connection = Connection(
+        user_id=user_id,
+        service_type="odoo",
+        display_name=body.display_name.strip() or f"{database} ({credentials['login']})",
+        credentials_encrypted=encrypt_credentials(json.dumps(credentials)),
+        status="active",
+    )
+    db.add(connection)
+    db.flush()  # assigns connection.id before we create Permission rows
+
+    for capability in DEFAULT_ODOO_CAPABILITIES:
+        db.add(Permission(connection_id=connection.id, capability=capability, allowed=False))
+
     db.commit()
     db.refresh(connection)
     return connection

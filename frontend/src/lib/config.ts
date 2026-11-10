@@ -103,10 +103,10 @@ export const serviceCategories: ServiceCategory[] = [
 		description: 'Orders, contacts and inventory from your business system.',
 		connectors: [
 			{
-				id: 'erp',
-				label: 'ERP',
-				description: 'Connect your business system. Not available yet.',
-				availability: 'soon',
+				id: 'odoo',
+				label: 'Odoo',
+				description: 'Odoo 17, 18 or 19 — Online, Odoo.sh or self-hosted, using an API key.',
+				availability: 'available',
 				icon: 'building',
 				accent: 'bg-amber-500/10 text-amber-600 dark:text-amber-400'
 			}
@@ -132,7 +132,11 @@ export const capabilityLabels: Record<string, string> = {
 	'email.search': 'Search emails',
 	'email.mark_seen': 'Mark read / unread',
 	'email.draft': 'Create drafts',
-	'email.send': 'Send emails'
+	'email.send': 'Send emails',
+	'odoo.read': 'Read records',
+	'odoo.create': 'Create records',
+	'odoo.write': 'Update records',
+	'odoo.delete': 'Delete records'
 };
 
 export function capabilityLabel(capability: string): string {

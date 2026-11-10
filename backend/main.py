@@ -7,6 +7,7 @@ from api.audit_log import router as audit_log_router
 from api.connections import router as connections_router
 from core.mcp_server import MCP_PATH, auth, mcp
 import services.email.service  # noqa: F401  registers the email_* tools on `mcp`
+import services.odoo.service  # noqa: F401  registers the odoo_* tools on `mcp`
 
 mcp_app = mcp.http_app(path=MCP_PATH)
 well_known_routes = auth.get_well_known_routes(mcp_path=MCP_PATH)

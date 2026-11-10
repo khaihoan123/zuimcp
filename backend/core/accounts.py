@@ -24,6 +24,8 @@ from core.security import decrypt_credentials
 SERVICE_TYPES: dict[str, tuple[str, ...]] = {
     "email": ("imap",),
 }
+# Odoo 17, 18 and 19 are all "odoo"; which API a server speaks is in its credentials.
+SERVICE_TYPES["odoo"] = ("odoo",)
 
 
 @dataclass
@@ -141,6 +143,15 @@ def list_user_accounts(user_id: str) -> list[dict]:
             "provider": r.service_type,
             "allowed": list(r.allowed),
         }
+        if service == "odoo":
+            # Where it points, never the API key.
+            creds = json.loads(decrypt_credentials(r.credentials_encrypted))
+            item.update(
+                url=creds.get("url"),
+                database=creds.get("database"),
+                login=creds.get("login"),
+                version=creds.get("version"),
+            )
         if service == "email":
             item["address"] = json.loads(decrypt_credentials(r.credentials_encrypted)).get("email")
         accounts.append(item)

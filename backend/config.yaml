@@ -18,6 +18,6 @@ MCP_RESOURCE_URL: "http://localhost:8000"
 # middleware in core/mcp_server.py. Guards against a runaway agent loop.
 MCP_RATE_LIMIT_PER_MINUTE: 60
 
-# SSRF guard (core/net.py): refuse mail servers on private/internal addresses.
-# Set true only when self-hosting with a mail server on your own LAN.
+# SSRF guard (core/net.py): refuse mail and Odoo servers on private/internal
+# addresses. Set true only when self-hosting with such a server on your own LAN.
 ALLOW_PRIVATE_MAIL_HOSTS: false
