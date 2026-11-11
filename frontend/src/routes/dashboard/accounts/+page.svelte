@@ -18,6 +18,13 @@
 		permissions: Permission[];
 	};
 
+	/** Human labels for a connection's `status`. */
+	const statusLabels: Record<string, string> = {
+		active: 'active',
+		disabled: 'disabled',
+		needs_reauth: 'needs reconnecting'
+	};
+
 	let connections = $state<Connection[]>([]);
 	let loading = $state(true);
 	let loadError = $state('');
@@ -139,11 +146,23 @@
 					{/if}
 					<p class="text-sm text-muted-foreground">
 						{connector?.label ?? conn.service_type} ·
-						<span class={conn.status === 'active' ? 'text-green-600 dark:text-green-400' : ''}>
-							{conn.status}
+						<span
+							class={conn.status === 'active'
+								? 'text-green-600 dark:text-green-400'
+								: conn.status === 'needs_reauth'
+									? 'text-destructive'
+									: ''}
+						>
+							{statusLabels[conn.status] ?? conn.status}
 						</span>
 					</p>
 				</div>
+				{#if conn.status === 'needs_reauth' && connector?.oauthStart}
+					<!-- A plain link: OAuth needs a full-page visit to the provider. -->
+					<Button size="sm" href={`${connector.oauthStart}?account=${conn.id}`} data-sveltekit-reload>
+						Reconnect
+					</Button>
+				{/if}
 				<Button variant="destructive" size="sm" onclick={() => deleteConnection(conn)}>
 					Disconnect
 				</Button>
@@ -165,7 +184,12 @@
 						</Label>
 					{/each}
 				</div>
-				{#if !conn.permissions.some((p) => p.allowed)}
+				{#if conn.status === 'needs_reauth'}
+					<p class="mt-3 text-sm text-destructive">
+						The provider no longer accepts this account's saved login (access was removed, or it
+						expired). Your agent can't use it until you reconnect it.
+					</p>
+				{:else if !conn.permissions.some((p) => p.allowed)}
 					<p class="mt-3 text-sm text-muted-foreground">
 						Nothing granted yet — your agent can see this account but can't do anything with it.
 					</p>

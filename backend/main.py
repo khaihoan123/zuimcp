@@ -5,6 +5,7 @@ from fastapi import FastAPI
 
 from api.audit_log import router as audit_log_router
 from api.connections import router as connections_router
+from api.gmail_oauth import router as gmail_oauth_router
 from core.mcp_server import MCP_PATH, auth, mcp
 import services.email.service  # noqa: F401  registers the email_* tools on `mcp`
 import services.odoo.service  # noqa: F401  registers the odoo_* tools on `mcp`
@@ -25,6 +26,7 @@ def health_check():
 
 
 app.include_router(connections_router)
+app.include_router(gmail_oauth_router)
 app.include_router(audit_log_router)
 app.mount("/", mcp_app)
 

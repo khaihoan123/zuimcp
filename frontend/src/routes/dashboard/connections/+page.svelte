@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { replaceState } from '$app/navigation';
 	import CheckIcon from '@lucide/svelte/icons/check';
 	import CopyIcon from '@lucide/svelte/icons/copy';
 	import PlusIcon from '@lucide/svelte/icons/plus';
@@ -50,11 +51,53 @@
 	let copied = $state(false);
 	let copyFailed = $state(false);
 
+	/** Set after returning from an OAuth connect (e.g. Gmail). */
+	let reconnected = $state(false);
+	let oauthError = $state('');
+	/** Set when the new account's address is also connected through another
+	 * provider (e.g. IMAP and Gmail): allowed, but the agent sees it twice. */
+	let addWarning = $state('');
+
+	/** Error codes the OAuth callback redirects back with (api/gmail_oauth.py). */
+	const oauthErrors: Record<string, string> = {
+		not_configured:
+			"Gmail isn't set up on this server yet. The administrator needs to add a Google OAuth client (GMAIL_OAUTH_CLIENT_ID).",
+		not_logged_in: 'Your session ended. Log in again, then connect the account again.',
+		invalid_state: "That Google sign-in expired or didn't start in this browser. Please try again.",
+		access_denied: "You cancelled on Google's screen, so nothing was connected.",
+		missing_scope:
+			"Google didn't give access to the mailbox. Try again and keep the Gmail permission ticked."
+	};
+
 	function countFor(serviceType: string) {
 		return connections.filter((c) => c.service_type === serviceType).length;
 	}
 
+	/** Reads and then removes the result params the OAuth callback added, so a
+	 * page reload doesn't show the message again. */
+	function readOAuthResult() {
+		const url = new URL(window.location.href);
+		const connected = url.searchParams.get('gmail_connected');
+		const error = url.searchParams.get('gmail_error');
+		if (!connected && !error) return;
+		if (connected) {
+			addedName = connected;
+			reconnected = url.searchParams.get('reconnected') === '1';
+			const imapTwin = url.searchParams.get('also_imap');
+			if (imapTwin) {
+				addWarning = `This address is also connected with IMAP as '${imapTwin}'. Your agent will see both; you may want to disconnect one.`;
+			}
+		} else if (error) {
+			oauthError = oauthErrors[error] ?? 'Google sign-in failed. Please try again.';
+		}
+		for (const key of ['gmail_connected', 'gmail_error', 'reconnected', 'also_imap']) {
+			url.searchParams.delete(key);
+		}
+		replaceState(url, {});
+	}
+
 	onMount(async () => {
+		readOAuthResult();
 		try {
 			const res = await fetch('/api/connections');
 			if (!res.ok) throw new Error('Failed to load connections');
@@ -78,9 +121,15 @@
 	}
 
 	function openConnect(connector: Connector) {
+		if (connector.oauthStart) {
+			// OAuth connectors have no form: the provider's own sign-in page asks.
+			window.location.href = connector.oauthStart;
+			return;
+		}
 		connecting = connector;
 		addError = '';
 		addedName = '';
+		addWarning = '';
 		form = {
 			display_name: '',
 			host: '',
@@ -120,6 +169,7 @@
 			if (!res.ok) throw new Error(body.detail ?? 'Could not connect');
 			connections = [...connections, body];
 			addedName = body.display_name;
+			addWarning = body.warning ?? '';
 			dialogOpen = false;
 		} catch (e) {
 			addError = e instanceof Error ? e.message : 'Something went wrong';
@@ -177,7 +227,17 @@
 		</Card.Content>
 	</Card.Root>
 
-	{#if addedName}
+	{#if addedName && reconnected}
+		<div
+			class="mt-6 flex items-center gap-2 rounded-lg border border-green-600/30 bg-green-600/10 px-4 py-3 text-sm"
+		>
+			<CheckIcon class="size-4 text-green-600 dark:text-green-400" />
+			<span>
+				Reconnected <strong>{addedName}</strong>. It works again, with the same permissions as
+				before.
+			</span>
+		</div>
+	{:else if addedName}
 		<div
 			class="mt-6 flex items-center gap-2 rounded-lg border border-green-600/30 bg-green-600/10 px-4 py-3 text-sm"
 		>
@@ -189,6 +249,22 @@
 				</a>.
 			</span>
 		</div>
+	{/if}
+
+	{#if addWarning}
+		<p
+			class="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-400"
+		>
+			{addWarning}
+		</p>
+	{/if}
+
+	{#if oauthError}
+		<p
+			class="mt-6 rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+		>
+			{oauthError}
+		</p>
 	{/if}
 
 	{#if loadError}

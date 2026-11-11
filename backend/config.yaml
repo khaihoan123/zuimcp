@@ -18,6 +18,16 @@ MCP_RESOURCE_URL: "http://localhost:8000"
 # middleware in core/mcp_server.py. Guards against a runaway agent loop.
 MCP_RATE_LIMIT_PER_MINUTE: 60
 
+# "Connect with Google" for Gmail mailboxes (api/gmail_oauth.py). A separate
+# Google OAuth client from the dashboard's "Sign in with Google" (the frontend's
+# GOOGLE_CLIENT_ID). Leave blank to turn Gmail off. The secret belongs in the
+# environment (.env), never in this file.
+GMAIL_OAUTH_CLIENT_ID: ""
+GMAIL_OAUTH_CLIENT_SECRET: ""
+# Must exactly match an "Authorized redirect URI" of that client. In dev /api is
+# proxied by Vite, so this is the dashboard's origin, not the backend's.
+GMAIL_OAUTH_REDIRECT_URI: "http://localhost:5173/api/connections/gmail/oauth/callback"
+
 # SSRF guard (core/net.py): refuse mail and Odoo servers on private/internal
 # addresses. Set true only when self-hosting with such a server on your own LAN.
 ALLOW_PRIVATE_MAIL_HOSTS: false

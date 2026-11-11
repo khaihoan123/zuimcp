@@ -56,6 +56,9 @@ export type Connector = {
 	icon: ConnectorIcon;
 	/** Tailwind classes for the logo tile. */
 	accent: string;
+	/** Set for OAuth connectors: Connect sends the browser here instead of
+	 * opening the credentials form. */
+	oauthStart?: string;
 };
 
 export type ServiceCategory = {
@@ -83,9 +86,10 @@ export const serviceCategories: ServiceCategory[] = [
 				id: 'gmail',
 				label: 'Gmail',
 				description: 'Native Gmail API over OAuth — no app password needed.',
-				availability: 'soon',
+				availability: 'available',
 				icon: 'mail',
-				accent: 'bg-red-500/10 text-red-500 dark:text-red-400'
+				accent: 'bg-red-500/10 text-red-500 dark:text-red-400',
+				oauthStart: '/api/connections/gmail/oauth/start'
 			},
 			{
 				id: 'ms_graph',

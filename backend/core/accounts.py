@@ -20,9 +20,9 @@ from core.db import SessionLocal
 from core.security import decrypt_credentials
 
 # Service family -> the connections.service_type values that belong to it.
-# Gmail / Outlook join "email" here once their adapters exist.
+# Outlook joins "email" here once its adapter exists.
 SERVICE_TYPES: dict[str, tuple[str, ...]] = {
-    "email": ("imap",),
+    "email": ("imap", "gmail"),
 }
 # Every Odoo version is "odoo"; which API a server speaks is in its credentials.
 SERVICE_TYPES["odoo"] = ("odoo",)
@@ -41,6 +41,35 @@ def _service_types(service: str) -> tuple[str, ...]:
         return SERVICE_TYPES[service]
     except KeyError:
         raise ValueError(f"Unknown service '{service}'") from None
+
+
+def _needs_reauth_error(user_id: str, service: str, account: str | None) -> ValueError | None:
+    """An account whose login the provider stopped accepting (status
+    'needs_reauth', e.g. a revoked Gmail token) can't be used, but saying so is
+    clearer than "no account matches". Matches `account` like resolve_account;
+    with no `account`, covers all of them. None if nothing matches."""
+    db = SessionLocal()
+    try:
+        rows = db.execute(
+            text(
+                "SELECT id, display_name FROM connections "
+                "WHERE user_id = :user_id AND status = 'needs_reauth' "
+                "AND service_type = ANY(:service_types) ORDER BY id"
+            ),
+            {"user_id": user_id, "service_types": list(_service_types(service))},
+        ).fetchall()
+    finally:
+        db.close()
+    if account:
+        wanted = account.strip()
+        rows = [r for r in rows if str(r.id) == wanted or r.display_name.casefold() == wanted.casefold()]
+    if not rows:
+        return None
+    names = ", ".join(f"'{r.display_name}'" for r in rows)
+    return ValueError(
+        f"The {service} account {names} needs to be reconnected: the provider no longer "
+        f"accepts its saved login. The user can reconnect it in the ZuiMCP dashboard."
+    )
 
 
 def resolve_account(user_id: str, service: str, account: str | None, capability: str) -> Account:
@@ -66,7 +95,9 @@ def resolve_account(user_id: str, service: str, account: str | None, capability:
         db.close()
 
     if not rows:
-        raise ValueError(f"No active {service} accounts are connected for this user")
+        raise _needs_reauth_error(user_id, service, account) or ValueError(
+            f"No active {service} accounts are connected for this user"
+        )
 
     if account:
         wanted = account.strip()
@@ -74,7 +105,7 @@ def resolve_account(user_id: str, service: str, account: str | None, capability:
         if not matches:
             matches = [r for r in rows if r.display_name.casefold() == wanted.casefold()]
         if not matches:
-            raise ValueError(
+            raise _needs_reauth_error(user_id, service, account) or ValueError(
                 f"No active {service} account matches '{account}'. "
                 f"Call list_accounts to see the valid values."
             )

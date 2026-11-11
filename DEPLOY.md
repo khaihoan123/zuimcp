@@ -55,6 +55,35 @@ an OAuth app and set its redirect URI to
 - **GitHub** — [github.com/settings/developers](https://github.com/settings/developers),
   a new **OAuth App** (not a GitHub App).
 
+## Gmail mailboxes (optional)
+
+"Connect with Google" on the Connections page needs its **own** Google OAuth
+client, separate from the sign-in one above. Leave `GMAIL_OAUTH_CLIENT_ID`
+blank to turn Gmail off.
+
+1. In [console.cloud.google.com](https://console.cloud.google.com), create (or
+   pick) a project.
+2. **APIs & Services → Library**: enable the **Gmail API**.
+3. **Google Auth Platform → Branding / Audience** (the OAuth consent screen):
+   user type **External**, publishing status **Testing**. Add your app name,
+   support email and domain.
+4. **Data Access**: add the scope `https://www.googleapis.com/auth/gmail.modify`
+   (the only one the app asks for).
+5. **Audience → Test users**: add every Google address that will connect
+   (at most 100 while in Testing).
+6. **Clients → Create client**: type **Web application**. Authorized redirect
+   URIs:
+   - `https://<APP_DOMAIN>/api/connections/gmail/oauth/callback`
+   - for local dev, `http://localhost:5173/api/connections/gmail/oauth/callback`
+7. Put the client id and secret in `.env` as `GMAIL_OAUTH_CLIENT_ID` and
+   `GMAIL_OAUTH_CLIENT_SECRET` (for local dev: in `backend/.env`).
+
+`gmail.modify` is a Google **restricted** scope. While the app is in Testing,
+only the listed test users can connect, and Google expires their refresh
+tokens after 7 days — the account then shows **needs reconnecting** in the
+dashboard. Opening it to everyone needs Google's app verification plus a
+yearly third-party security assessment.
+
 ## Notes
 
 - `CREDENTIALS_ENCRYPTION_KEY` has no rotation support (`core/security.py`).

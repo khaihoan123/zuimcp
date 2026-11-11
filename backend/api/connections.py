@@ -10,7 +10,8 @@ from sqlalchemy.orm import Session
 from core.auth import get_current_user_id
 from core.db import get_db
 from core.net import MAIL_CONNECT_TIMEOUT, UnsafeHostError, ensure_public_host
-from core.security import encrypt_credentials
+from core.accounts import SERVICE_TYPES
+from core.security import decrypt_credentials, encrypt_credentials
 from models import Connection, Permission
 from services.odoo.client import OdooAuthError, OdooClient, OdooVersionError, host_and_port, normalize_url
 
@@ -40,6 +41,9 @@ class ConnectionOut(BaseModel):
     display_name: str
     status: str
     permissions: list[PermissionOut]
+    # Only set when creating: something the user should know, e.g. that the
+    # same address is also connected through another provider.
+    warning: str | None = None
 
 
 class CreateImapConnectionIn(BaseModel):
@@ -74,6 +78,42 @@ def _get_owned_connection(db: Session, connection_id: int, user_id: str) -> Conn
     return connection
 
 
+# How each mailbox provider is named in messages to the user.
+EMAIL_PROVIDER_LABELS = {"imap": "IMAP", "gmail": "Gmail"}
+
+
+def mailboxes_with_address(db: Session, user_id: str, address: str) -> list[tuple[Connection, dict]]:
+    """The user's mailboxes (any provider, any status) whose address equals
+    `address`, ignoring case, with their decrypted credentials."""
+    rows = (
+        db.query(Connection)
+        .filter(Connection.user_id == user_id, Connection.service_type.in_(SERVICE_TYPES["email"]))
+        .order_by(Connection.id)
+        .all()
+    )
+    wanted = address.strip().casefold()
+    found = []
+    for connection in rows:
+        creds = json.loads(decrypt_credentials(connection.credentials_encrypted))
+        if creds.get("email", "").strip().casefold() == wanted:
+            found.append((connection, creds))
+    return found
+
+
+def same_address_warning(others: list[Connection]) -> str | None:
+    """Same mailbox through two providers is allowed (handy while switching from
+    IMAP to Gmail), but the agent then sees it twice, so tell the user."""
+    if not others:
+        return None
+    where = ", ".join(
+        f"{EMAIL_PROVIDER_LABELS.get(c.service_type, c.service_type)} as '{c.display_name}'" for c in others
+    )
+    return (
+        f"This address is also connected with {where}. Your agent will see both; "
+        f"you may want to disconnect one."
+    )
+
+
 @router.get("", response_model=list[ConnectionOut])
 def list_connections(user_id: str = Depends(get_current_user_id), db: Session = Depends(get_db)):
     return db.query(Connection).filter(Connection.user_id == user_id).all()
@@ -90,6 +130,17 @@ def create_imap_connection(
         ensure_public_host(body.smtp_host, body.smtp_port)
     except UnsafeHostError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+    # The same mailbox twice is never useful: the agent would have to ask
+    # "which one?" every time, for two names of one inbox. Checked before
+    # logging in, so a duplicate fails fast.
+    same_address = mailboxes_with_address(db, user_id, body.email)
+    for existing, creds in same_address:
+        if existing.service_type == "imap" and creds.get("host", "").strip().casefold() == body.host.strip().casefold():
+            raise HTTPException(
+                status_code=409,
+                detail=f"This mailbox is already connected as '{existing.display_name}'.",
+            )
 
     # Fail fast — verify both protocols actually work before ever storing
     # credentials. IMAP first since it's required; SMTP failing after IMAP
@@ -142,7 +193,10 @@ def create_imap_connection(
 
     db.commit()
     db.refresh(connection)
-    return connection
+    out = ConnectionOut.model_validate(connection)
+    # Same address on another IMAP server is another mailbox: no warning.
+    out.warning = same_address_warning([c for c, _ in same_address if c.service_type != "imap"])
+    return out
 
 
 @router.patch("/{connection_id}", response_model=ConnectionOut)

@@ -10,7 +10,7 @@ deciding exactly what each agent may do.
 - **Rate limiting** — per-user cap on tool calls, so a runaway agent loop can't hammer your mailbox.
 - **No email stored** — messages are fetched live; only encrypted connection credentials are kept.
 
-> Status: early. IMAP/SMTP works today; native Gmail and Microsoft 365 adapters are planned.
+> Status: early. IMAP/SMTP and Gmail (native API, OAuth) work today; a Microsoft 365 adapter is planned.
 
 ## How it works
 
@@ -19,7 +19,7 @@ MCP client ──OAuth 2.1──▶ frontend (SvelteKit + Better Auth)   issues 
      │                                                          
      └──Bearer JWT──────▶ backend (FastAPI + FastMCP)            verifies JWT, runs tools
                                    │
-                                   └──▶ your mailbox (IMAP / SMTP)
+                                   └──▶ your mailbox (IMAP / SMTP, Gmail API)
 ```
 
 | Part | Stack | Role |

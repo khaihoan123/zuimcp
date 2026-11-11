@@ -162,6 +162,75 @@ def test_connection_errors_do_not_leak_server_details(monkeypatch):
     assert "PostgreSQL" not in res.json()["detail"]
 
 
+# --- the same mailbox twice -----------------------------------------------
+
+
+def imap_rows(db, user_id):
+    db.expire_all()
+    return db.query(Connection).filter_by(user_id=user_id, service_type="imap").all()
+
+
+@pytest.mark.parametrize("again", [
+    {},
+    {"email": "ME@Example.com", "host": "IMAP.example.com", "display_name": "Other name"},
+])
+def test_same_imap_mailbox_twice_is_refused(db, fake_mail_servers, again):
+    alice = make_user("alice")
+    client = logged_in(alice)
+    assert client.post("/api/connections/imap", json=NEW_ACCOUNT).status_code == 201
+
+    res = client.post("/api/connections/imap", json={**NEW_ACCOUNT, **again})
+
+    assert res.status_code == 409
+    assert res.json()["detail"] == "This mailbox is already connected as 'Work'."
+    assert len(imap_rows(db, alice)) == 1
+
+
+def test_duplicate_is_refused_before_logging_in(monkeypatch):
+    alice = make_user("alice")
+    make_connection(alice, name="Work")  # work@example.com on imap.example.com
+
+    def must_not_connect(*args, **kwargs):
+        raise AssertionError("logged in to check a duplicate")
+
+    monkeypatch.setattr(connections, "ensure_public_host", lambda host, port: None)
+    monkeypatch.setattr(connections, "MailBox", must_not_connect)
+
+    res = logged_in(alice).post(
+        "/api/connections/imap", json={**NEW_ACCOUNT, "email": "work@example.com"}
+    )
+
+    assert res.status_code == 409
+
+
+def test_same_address_on_another_server_or_for_another_user_is_allowed(db, fake_mail_servers):
+    alice = make_user("alice")
+    bob = make_user("bob")
+    logged_in(alice).post("/api/connections/imap", json=NEW_ACCOUNT)
+
+    other_server = logged_in(alice).post("/api/connections/imap", json={**NEW_ACCOUNT, "host": "imap.other.com"})
+    other_user = logged_in(bob).post("/api/connections/imap", json=NEW_ACCOUNT)
+
+    assert (other_server.status_code, other_user.status_code) == (201, 201)
+    assert other_server.json()["warning"] is None
+
+
+def test_same_address_also_on_gmail_is_allowed_with_a_warning(db, fake_mail_servers):
+    from tests.test_email_providers import make_gmail_connection
+
+    alice = make_user("alice")
+    make_gmail_connection(alice, address="me@example.com", name="Personal Gmail")
+
+    res = logged_in(alice).post("/api/connections/imap", json=NEW_ACCOUNT)
+
+    assert res.status_code == 201
+    assert res.json()["warning"] == (
+        "This address is also connected with Gmail as 'Personal Gmail'. "
+        "Your agent will see both; you may want to disconnect one."
+    )
+    assert logged_in(alice).get("/api/connections").json()[0]["warning"] is None
+
+
 # --- audit log -------------------------------------------------------------
 
 

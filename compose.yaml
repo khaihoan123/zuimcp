@@ -44,6 +44,11 @@ services:
       MCP_RESOURCE_URL: https://${MCP_DOMAIN:?set MCP_DOMAIN in .env}
       # true only if your mail server is on a private network (see config.yaml).
       ALLOW_PRIVATE_MAIL_HOSTS: ${ALLOW_PRIVATE_MAIL_HOSTS:-false}
+      # "Connect with Google" for Gmail. Blank = Gmail turned off. The redirect
+      # URI goes through Caddy's /api route on the app domain.
+      GMAIL_OAUTH_CLIENT_ID: ${GMAIL_OAUTH_CLIENT_ID:-}
+      GMAIL_OAUTH_CLIENT_SECRET: ${GMAIL_OAUTH_CLIENT_SECRET:-}
+      GMAIL_OAUTH_REDIRECT_URI: https://${APP_DOMAIN}/api/connections/gmail/oauth/callback
     depends_on:
       db:
         condition: service_healthy
