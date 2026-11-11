@@ -78,6 +78,34 @@ def _pkce_challenge(verifier: str) -> str:
     return base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
 
 
+def _owned_gmail_connection(db: Session, user_id: str, connection_id: int) -> Connection | None:
+    """Only the user's own Gmail connection: never another user's."""
+    return (
+        db.query(Connection)
+        .filter(Connection.id == connection_id, Connection.user_id == user_id,
+                Connection.service_type == "gmail")
+        .first()
+    )
+
+
+def _address_of(connection: Connection) -> str:
+    return json.loads(decrypt_credentials(connection.credentials_encrypted)).get("email", "")
+
+
+def _renew_login(db: Session, connection: Connection, credentials: dict) -> RedirectResponse:
+    """Reconnect: new tokens on the existing connection, which keeps its name
+    and permissions. Google may leave out the refresh token; keep the old one."""
+    if not credentials["refresh_token"]:
+        old = json.loads(decrypt_credentials(connection.credentials_encrypted))
+        credentials["refresh_token"] = old.get("refresh_token", "")
+    if not credentials["refresh_token"]:
+        return _back_to_dashboard(gmail_error="no_refresh_token")
+    connection.credentials_encrypted = encrypt_credentials(json.dumps(credentials))
+    connection.status = "active"
+    db.commit()
+    return _back_to_dashboard(gmail_connected=connection.display_name, reconnected="1")
+
+
 @router.get("/start")
 def start(request: Request, account: int | None = None, db: Session = Depends(get_db)):
     """Sends the browser to Google's consent screen. `account` (a connection id)
@@ -89,23 +117,27 @@ def start(request: Request, account: int | None = None, db: Session = Depends(ge
     if settings is None:
         return _back_to_dashboard(gmail_error="not_configured")
 
+    # Reconnect: remember which account this is for, so the callback can
+    # refuse a sign-in to a different Google account.
     login_hint = ""
+    reconnect_id = None
     if account is not None:
-        # Only the user's own Gmail connection: never hint someone else's address.
-        connection = (
-            db.query(Connection)
-            .filter(Connection.id == account, Connection.user_id == user_id,
-                    Connection.service_type == "gmail")
-            .first()
-        )
+        connection = _owned_gmail_connection(db, user_id, account)
         if connection:
-            login_hint = json.loads(decrypt_credentials(connection.credentials_encrypted)).get("email", "")
+            reconnect_id = connection.id
+            login_hint = _address_of(connection)
 
     state = secrets.token_urlsafe(32)
     verifier = secrets.token_urlsafe(64)  # 86 chars; PKCE allows 43-128
     cookie = encrypt_credentials(
         json.dumps(
-            {"state": state, "verifier": verifier, "user_id": user_id, "exp": int(time.time()) + STATE_TTL}
+            {
+                "state": state,
+                "verifier": verifier,
+                "user_id": user_id,
+                "reconnect_id": reconnect_id,
+                "exp": int(time.time()) + STATE_TTL,
+            }
         )
     )
 
@@ -199,22 +231,28 @@ def callback(
         "scope": token.get("scope", ""),
     }
 
-    same_address = mailboxes_with_address(db, user_id, address)
+    # Reconnect button: renew that account, but only with the same Google
+    # account. A different one would otherwise become a new, unasked-for account.
+    if saved.get("reconnect_id") is not None:
+        target = _owned_gmail_connection(db, user_id, saved["reconnect_id"])
+        if target is not None:
+            expected = _address_of(target)
+            if expected.casefold() != address.casefold():
+                return _back_to_dashboard(gmail_error="wrong_account", expected=expected, got=address)
+            return _renew_login(db, target, credentials)
 
-    # The same Google address connected again (e.g. "Reconnect") updates the
-    # existing connection — keeping its name and permissions — instead of
-    # creating a duplicate.
-    existing = next(((c, creds) for c, creds in same_address if c.service_type == "gmail"), None)
-    if existing:
-        connection, old = existing
-        if not credentials["refresh_token"]:
-            credentials["refresh_token"] = old.get("refresh_token", "")
-        if not credentials["refresh_token"]:
-            return _back_to_dashboard(gmail_error="no_refresh_token")
-        connection.credentials_encrypted = encrypt_credentials(json.dumps(credentials))
-        connection.status = "active"
-        db.commit()
-        return _back_to_dashboard(gmail_connected=connection.display_name, reconnected="1")
+    # One mailbox, one account (see mailboxes_with_address in api/connections.py).
+    same_address = mailboxes_with_address(db, user_id, address)
+    for existing, _ in same_address:
+        if existing.service_type == "gmail":
+            if existing.status == "needs_reauth":
+                # Connect instead of Reconnect on a broken account: same thing.
+                return _renew_login(db, existing, credentials)
+            return _back_to_dashboard(gmail_error="already_connected", existing=existing.display_name)
+    imap_twin = next((c for c, _ in same_address if c.service_type == "imap"), None)
+    if imap_twin:
+        # IMAP and Gmail reach the same mailbox: the agent would see it twice.
+        return _back_to_dashboard(gmail_error="connected_with_imap", existing=imap_twin.display_name)
 
     if not credentials["refresh_token"]:
         return _back_to_dashboard(gmail_error="no_refresh_token")
@@ -231,11 +269,4 @@ def callback(
     for capability in GMAIL_CAPABILITIES:
         db.add(Permission(connection_id=connection.id, capability=capability, allowed=False))
     db.commit()
-
-    result = {"gmail_connected": connection.display_name}
-    # Allowed (handy while moving from IMAP to Gmail), but the agent now sees
-    # the mailbox twice, so the dashboard warns about it.
-    imap_twin = next((c for c, _ in same_address if c.service_type == "imap"), None)
-    if imap_twin:
-        result["also_imap"] = imap_twin.display_name
-    return _back_to_dashboard(**result)
+    return _back_to_dashboard(gmail_connected=connection.display_name)

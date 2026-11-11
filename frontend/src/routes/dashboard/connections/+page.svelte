@@ -54,9 +54,6 @@
 	/** Set after returning from an OAuth connect (e.g. Gmail). */
 	let reconnected = $state(false);
 	let oauthError = $state('');
-	/** Set when the new account's address is also connected through another
-	 * provider (e.g. IMAP and Gmail): allowed, but the agent sees it twice. */
-	let addWarning = $state('');
 
 	/** Error codes the OAuth callback redirects back with (api/gmail_oauth.py). */
 	const oauthErrors: Record<string, string> = {
@@ -68,6 +65,22 @@
 		missing_scope:
 			"Google didn't give access to the mailbox. Try again and keep the Gmail permission ticked."
 	};
+
+	/** Errors that name accounts, built from the extra params sent with them. */
+	function oauthErrorMessage(error: string, params: URLSearchParams): string {
+		const existing = params.get('existing') ?? '';
+		if (error === 'already_connected') {
+			return `This Gmail account is already connected as '${existing}'.`;
+		}
+		if (error === 'connected_with_imap') {
+			return `This address is already connected with IMAP as '${existing}'. Gmail and IMAP reach the same mailbox, so disconnect the IMAP one first (on the Accounts page). Gmail is recommended: no app password needed.`;
+		}
+		if (error === 'wrong_account') {
+			const expected = params.get('expected') ?? '';
+			return `You signed in to Google as ${params.get('got') ?? ''}, but this account is ${expected}. Click Reconnect again and choose ${expected}.`;
+		}
+		return oauthErrors[error] ?? 'Google sign-in failed. Please try again.';
+	}
 
 	function countFor(serviceType: string) {
 		return connections.filter((c) => c.service_type === serviceType).length;
@@ -83,14 +96,10 @@
 		if (connected) {
 			addedName = connected;
 			reconnected = url.searchParams.get('reconnected') === '1';
-			const imapTwin = url.searchParams.get('also_imap');
-			if (imapTwin) {
-				addWarning = `This address is also connected with IMAP as '${imapTwin}'. Your agent will see both; you may want to disconnect one.`;
-			}
 		} else if (error) {
-			oauthError = oauthErrors[error] ?? 'Google sign-in failed. Please try again.';
+			oauthError = oauthErrorMessage(error, url.searchParams);
 		}
-		for (const key of ['gmail_connected', 'gmail_error', 'reconnected', 'also_imap']) {
+		for (const key of ['gmail_connected', 'gmail_error', 'reconnected', 'existing', 'expected', 'got']) {
 			url.searchParams.delete(key);
 		}
 		replaceState(url, {});
@@ -129,7 +138,6 @@
 		connecting = connector;
 		addError = '';
 		addedName = '';
-		addWarning = '';
 		form = {
 			display_name: '',
 			host: '',
@@ -169,7 +177,6 @@
 			if (!res.ok) throw new Error(body.detail ?? 'Could not connect');
 			connections = [...connections, body];
 			addedName = body.display_name;
-			addWarning = body.warning ?? '';
 			dialogOpen = false;
 		} catch (e) {
 			addError = e instanceof Error ? e.message : 'Something went wrong';
@@ -249,14 +256,6 @@
 				</a>.
 			</span>
 		</div>
-	{/if}
-
-	{#if addWarning}
-		<p
-			class="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-400"
-		>
-			{addWarning}
-		</p>
 	{/if}
 
 	{#if oauthError}

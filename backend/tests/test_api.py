@@ -212,23 +212,23 @@ def test_same_address_on_another_server_or_for_another_user_is_allowed(db, fake_
     other_user = logged_in(bob).post("/api/connections/imap", json=NEW_ACCOUNT)
 
     assert (other_server.status_code, other_user.status_code) == (201, 201)
-    assert other_server.json()["warning"] is None
 
 
-def test_same_address_also_on_gmail_is_allowed_with_a_warning(db, fake_mail_servers):
+def test_same_address_already_on_gmail_is_refused(db, fake_mail_servers):
+    # IMAP and Gmail for one address open the same mailbox: one account only.
     from tests.test_email_providers import make_gmail_connection
 
     alice = make_user("alice")
-    make_gmail_connection(alice, address="me@example.com", name="Personal Gmail")
+    make_gmail_connection(alice, address="Me@Example.com", name="Personal Gmail")
 
     res = logged_in(alice).post("/api/connections/imap", json=NEW_ACCOUNT)
 
-    assert res.status_code == 201
-    assert res.json()["warning"] == (
-        "This address is also connected with Gmail as 'Personal Gmail'. "
-        "Your agent will see both; you may want to disconnect one."
+    assert res.status_code == 409
+    assert res.json()["detail"] == (
+        "This address is already connected with Gmail as 'Personal Gmail'. "
+        "Gmail and IMAP reach the same mailbox, so disconnect the Gmail one first."
     )
-    assert logged_in(alice).get("/api/connections").json()[0]["warning"] is None
+    assert imap_rows(db, alice) == []
 
 
 # --- audit log -------------------------------------------------------------

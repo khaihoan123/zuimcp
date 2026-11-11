@@ -222,12 +222,26 @@ def test_failed_code_exchange(db, google):
     assert query_of(res) == {"gmail_error": "token_failed"}
 
 
-def test_same_address_again_updates_instead_of_duplicating(db, google_ok):
+def test_connecting_a_working_gmail_again_is_refused(db, google_ok):
+    user = make_user("alice")
+    existing = make_gmail_connection(user, address="Me@Gmail.com", name="Personal")
+
+    _, res = connect(browser(user))
+
+    assert query_of(res) == {"gmail_error": "already_connected", "existing": "Personal"}
+    [conn] = gmail_rows(db, user)
+    assert stored(existing)[1]["refresh_token"] == "refresh-1"  # untouched
+
+
+@pytest.mark.parametrize("via_reconnect_button", [True, False])
+def test_account_needing_reauth_gets_its_login_renewed(db, google_ok, via_reconnect_button):
     user = make_user("alice")
     existing = make_gmail_connection(user, address="Me@Gmail.com", granted=("email.read",),
                                      status="needs_reauth", name="Personal")
+    client = browser(user)
 
-    _, res = connect(browser(user))
+    started = client.get(START, params={"account": existing} if via_reconnect_button else None)
+    res = client.get(CALLBACK, params={"code": "c", "state": query_of(started)["state"]})
 
     assert query_of(res) == {"gmail_connected": "Personal", "reconnected": "1"}
     [conn] = gmail_rows(db, user)
@@ -235,6 +249,20 @@ def test_same_address_again_updates_instead_of_duplicating(db, google_ok):
     assert conn.status == "active"
     assert {p.capability for p in conn.permissions if p.allowed} == {"email.read"}  # grants kept
     assert stored(existing)[1]["refresh_token"] == "new-refresh"
+
+
+def test_reconnect_with_a_different_google_account_is_refused(db, google_ok):
+    user = make_user("alice")
+    existing = make_gmail_connection(user, address="a@gmail.com", status="needs_reauth")
+    google_ok.route("GET", f"{GMAIL}/profile", httpx.Response(200, json={"emailAddress": "b@gmail.com"}))
+    client = browser(user)
+
+    started = client.get(START, params={"account": existing})
+    res = client.get(CALLBACK, params={"code": "c", "state": query_of(started)["state"]})
+
+    assert query_of(res) == {"gmail_error": "wrong_account", "expected": "a@gmail.com", "got": "b@gmail.com"}
+    [conn] = gmail_rows(db, user)  # no new account for b@gmail.com
+    assert (conn.id, conn.status) == (existing, "needs_reauth")
 
 
 def test_same_address_for_another_user_is_a_separate_connection(db, google_ok):
@@ -248,13 +276,13 @@ def test_same_address_for_another_user_is_a_separate_connection(db, google_ok):
     assert len(gmail_rows(db, bob)) == 1
 
 
-def test_same_address_already_on_imap_connects_with_a_warning(db, google_ok):
+def test_same_address_already_on_imap_is_refused(db, google_ok):
+    # IMAP and Gmail for one address open the same mailbox: one account only.
     user = make_user("alice")
     make_connection(user, name="Me")  # IMAP, address me@example.com
     google_ok.route("GET", f"{GMAIL}/profile", httpx.Response(200, json={"emailAddress": "ME@example.com"}))
 
     _, res = connect(browser(user))
 
-    assert query_of(res) == {"gmail_connected": "ME@example.com", "also_imap": "Me"}
-    assert len(gmail_rows(db, user)) == 1
-
+    assert query_of(res) == {"gmail_error": "connected_with_imap", "existing": "Me"}
+    assert gmail_rows(db, user) == []

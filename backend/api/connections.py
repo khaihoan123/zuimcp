@@ -41,9 +41,6 @@ class ConnectionOut(BaseModel):
     display_name: str
     status: str
     permissions: list[PermissionOut]
-    # Only set when creating: something the user should know, e.g. that the
-    # same address is also connected through another provider.
-    warning: str | None = None
 
 
 class CreateImapConnectionIn(BaseModel):
@@ -78,13 +75,16 @@ def _get_owned_connection(db: Session, connection_id: int, user_id: str) -> Conn
     return connection
 
 
-# How each mailbox provider is named in messages to the user.
-EMAIL_PROVIDER_LABELS = {"imap": "IMAP", "gmail": "Gmail"}
-
-
 def mailboxes_with_address(db: Session, user_id: str, address: str) -> list[tuple[Connection, dict]]:
     """The user's mailboxes (any provider, any status) whose address equals
-    `address`, ignoring case, with their decrypted credentials."""
+    `address`, ignoring case, with their decrypted credentials.
+
+    Rule: one mailbox, one account. The same mailbox twice would make the agent
+    ask "which one?" every time and could repeat actions. IMAP and Gmail for
+    one address count as the same mailbox: mail for an address arrives in one
+    place, and both just open it. Only the same address on two different IMAP
+    servers is allowed (e.g. while moving a domain to a new mail host).
+    """
     rows = (
         db.query(Connection)
         .filter(Connection.user_id == user_id, Connection.service_type.in_(SERVICE_TYPES["email"]))
@@ -98,20 +98,6 @@ def mailboxes_with_address(db: Session, user_id: str, address: str) -> list[tupl
         if creds.get("email", "").strip().casefold() == wanted:
             found.append((connection, creds))
     return found
-
-
-def same_address_warning(others: list[Connection]) -> str | None:
-    """Same mailbox through two providers is allowed (handy while switching from
-    IMAP to Gmail), but the agent then sees it twice, so tell the user."""
-    if not others:
-        return None
-    where = ", ".join(
-        f"{EMAIL_PROVIDER_LABELS.get(c.service_type, c.service_type)} as '{c.display_name}'" for c in others
-    )
-    return (
-        f"This address is also connected with {where}. Your agent will see both; "
-        f"you may want to disconnect one."
-    )
 
 
 @router.get("", response_model=list[ConnectionOut])
@@ -131,12 +117,18 @@ def create_imap_connection(
     except UnsafeHostError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    # The same mailbox twice is never useful: the agent would have to ask
-    # "which one?" every time, for two names of one inbox. Checked before
+    # One mailbox, one account (see mailboxes_with_address). Checked before
     # logging in, so a duplicate fails fast.
-    same_address = mailboxes_with_address(db, user_id, body.email)
-    for existing, creds in same_address:
-        if existing.service_type == "imap" and creds.get("host", "").strip().casefold() == body.host.strip().casefold():
+    for existing, creds in mailboxes_with_address(db, user_id, body.email):
+        if existing.service_type == "gmail":
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"This address is already connected with Gmail as '{existing.display_name}'. "
+                    f"Gmail and IMAP reach the same mailbox, so disconnect the Gmail one first."
+                ),
+            )
+        if creds.get("host", "").strip().casefold() == body.host.strip().casefold():
             raise HTTPException(
                 status_code=409,
                 detail=f"This mailbox is already connected as '{existing.display_name}'.",
@@ -193,10 +185,7 @@ def create_imap_connection(
 
     db.commit()
     db.refresh(connection)
-    out = ConnectionOut.model_validate(connection)
-    # Same address on another IMAP server is another mailbox: no warning.
-    out.warning = same_address_warning([c for c, _ in same_address if c.service_type != "imap"])
-    return out
+    return connection
 
 
 @router.patch("/{connection_id}", response_model=ConnectionOut)
