@@ -1,49 +1,88 @@
 # ZuiMCP
 
-Give AI agents (Claude, n8n, any MCP client) safe access to your email, with you
-deciding exactly what each agent may do.
+[![CI](https://github.com/khaihoan123/zuimcp/actions/workflows/ci.yml/badge.svg)](https://github.com/khaihoan123/zuimcp/actions/workflows/ci.yml)
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
 
-- **Per-account, per-action permissions** — e.g. let an agent read and draft, but never send.
-- **Standard MCP OAuth 2.1** — clients sign in through the browser (discovery, dynamic
-  client registration, PKCE). No API keys to copy around.
-- **Activity log** — every tool call is recorded with its capability and result.
-- **Rate limiting** — per-user cap on tool calls, so a runaway agent loop can't hammer your mailbox.
-- **No email stored** — messages are fetched live; only encrypted connection credentials are kept.
+**One safe MCP endpoint for all your apps and APIs, with you deciding exactly what each AI agent may do.**
 
-> Status: early. IMAP/SMTP and Gmail (native API, OAuth) work today; a Microsoft 365 adapter is planned.
+ZuiMCP is a multi-tenant [MCP](https://modelcontextprotocol.io) platform. You connect your
+accounts once, choose what an agent may do on each one (read, search, draft, send, create,
+update, delete), and add a single URL to Claude, n8n or any MCP client. The agent signs in
+with OAuth and only ever sees the actions you allowed.
+
+The goal is to connect any API or MCP server behind the same permissions, account
+selection and audit log. Email and Odoo come first.
+
+> **Status:** early, under active development. IMAP/SMTP, Gmail and Odoo (8 to 19)
+> work today. Microsoft 365 is planned.
+
+## Why
+
+Giving an AI agent your mailbox password or an Odoo admin key gives it everything.
+ZuiMCP sits in between:
+
+- **Closed by default.** Every action is off until you turn it on, per account.
+  "Read and draft, but never send" is one toggle.
+- **The agent never guesses the account.** With several mailboxes or databases,
+  every call must name the account. A call without one fails and lists the choices,
+  so an email can't go out from the wrong address.
+- **Agents only see what they may use.** Tools no account allows are hidden from the
+  agent's tool list, and they're refused anyway if called.
+- **One endpoint for everything.** Add `/mcp` once; email and Odoo tools appear under it.
+
+## Features
+
+- **Connectors**
+  - **Email:** any IMAP/SMTP mailbox (e.g. cPanel hosting), and Gmail through the native Gmail API with "Connect with Google".
+  - **Odoo:** versions 8 to 19. It picks Odoo 19's JSON-2 API or the classic JSON-RPC API automatically.
+- **Several accounts per service**, e.g. work and personal mailboxes, or production and test Odoo databases.
+- **Standard MCP OAuth 2.1**: discovery, dynamic client registration and PKCE. No API keys to copy into the AI client.
+- **Activity log**: every tool call is recorded with its capability and result, but never with message contents.
+- **Rate limiting**: a per-user cap, so a runaway agent loop can't hammer your mailbox or ERP.
+- **Security**:
+  - credentials are encrypted at rest (Fernet), and no email is stored, because messages are fetched live;
+  - an SSRF guard refuses private and internal hosts, re-checked on every connection;
+  - Odoo requests never follow redirects.
 
 ## How it works
 
-```
-MCP client ──OAuth 2.1──▶ frontend (SvelteKit + Better Auth)   issues JWTs, dashboard
-     │                                                          
-     └──Bearer JWT──────▶ backend (FastAPI + FastMCP)            verifies JWT, runs tools
-                                   │
-                                   └──▶ your mailbox (IMAP / SMTP, Gmail API)
+```mermaid
+flowchart LR
+    A[AI client<br/>Claude, n8n, ...] -- OAuth 2.1 sign-in --> F[Frontend<br/>SvelteKit + Better Auth]
+    A -- Bearer JWT --> B[Backend /mcp<br/>FastAPI + FastMCP]
+    B --> P{Permission check<br/>account + capability}
+    P --> E[Email<br/>IMAP / SMTP, Gmail API]
+    P --> O[Odoo<br/>JSON-2 / JSON-RPC]
+    F -- dashboard: accounts, permissions, activity --> DB[(Postgres)]
+    B --> DB
 ```
 
 | Part | Stack | Role |
 |---|---|---|
-| `frontend/` | SvelteKit, Svelte 5, Tailwind v4, shadcn-svelte, Better Auth | Sign-in, OAuth authorization server, dashboard |
-| `backend/` | FastAPI, FastMCP, SQLAlchemy, Alembic | MCP resource server at `/mcp`, REST API for the dashboard |
-| Postgres | — | Users and sessions (Better Auth), connections, permissions, audit log |
+| `frontend/` | SvelteKit, Svelte 5, Tailwind v4, shadcn-svelte, Better Auth | Sign-in, OAuth 2.1 authorization server, dashboard |
+| `backend/` | Python, FastAPI, FastMCP, SQLAlchemy, Alembic, httpx | MCP resource server at `/mcp`, REST API for the dashboard |
+| Postgres | | Users and sessions (Better Auth), connections, permissions, audit log |
 
 ## MCP tools
 
-One endpoint, `/mcp`, serves every service. Tools are named `<service>_<action>`.
+Tools are named `<service>_<action>`. Every tool takes an optional `account` argument,
+which is required when the user has more than one account for that service.
 
 | Tool | Capability |
 |---|---|
-| `list_accounts` | none (lists the user's accounts and what each allows) |
+| `list_accounts` | none (lists your accounts and what each one allows) |
 | `email_list_folders`, `email_list`, `email_read`, `email_get_attachment` | `email.read` |
 | `email_search` | `email.search` |
 | `email_draft` | `email.draft` |
 | `email_send` | `email.send` |
 | `email_mark_seen` | `email.mark_seen` |
+| `odoo_list_models`, `odoo_get_fields`, `odoo_search`, `odoo_read`, `odoo_count`, `odoo_read_group` | `odoo.read` |
+| `odoo_create` | `odoo.create` |
+| `odoo_update` | `odoo.write` |
+| `odoo_delete` | `odoo.delete` |
 
-Each connected account has its own set of granted capabilities, managed on the dashboard; all are off by default. An agent only sees the tools at least one of the user's accounts allows.
-
-Every tool takes an `account` argument. With one account per service it can be left out. With several, it is required and never guessed: a call without it fails and lists the choices, so an agent can't act on the wrong account by accident.
+There is deliberately no "call any method" tool. Odoo's own access rights still apply
+on top. Connect Odoo with a dedicated user whose rights match what the agent should do.
 
 ## Local development
 
@@ -65,8 +104,8 @@ uv run alembic upgrade head   # run after the Better Auth migration (foreign key
 uv run fastapi dev main.py
 ```
 
-Then sign up at http://localhost:5173, connect a mailbox, and add
-`http://localhost:8000/mcp` as a custom connector in your MCP client.
+Then sign up at http://localhost:5173, connect a mailbox or Odoo database, turn on the
+actions you want, and add `http://localhost:8000/mcp` as a custom connector in your MCP client.
 
 Generate secrets with:
 
@@ -75,13 +114,15 @@ openssl rand -base64 32                                                         
 python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"  # CREDENTIALS_ENCRYPTION_KEY
 ```
 
-Defaults live in `backend/config.yaml`; environment variables override them.
+Defaults live in `backend/config.yaml`; environment variables override them. Gmail needs
+a Google Cloud OAuth client, see [DEPLOY.md](DEPLOY.md#gmail-mailboxes-optional).
 
 ### Running tests
 
 The backend tests need Postgres. They use a separate database whose name ends in
-`_test` (by default your `DATABASE_URL` with `_test` appended — create it once with
-`createdb mcp_platform_test`), and drop all its tables on every run.
+`_test` (by default your `DATABASE_URL` with `_test` appended; create it once with
+`createdb mcp_platform_test`), and drop all its tables on every run. External services
+(IMAP, SMTP, Google, Odoo) are faked, so no real mail is sent.
 
 ```bash
 cd backend && uv run pytest              # or set TEST_DATABASE_URL explicitly
@@ -101,7 +142,13 @@ uv run python main.py stdio
 
 ## Self-hosting
 
-Docker Compose with Caddy for TLS — see [DEPLOY.md](DEPLOY.md).
+Docker Compose with Caddy for TLS. See [DEPLOY.md](DEPLOY.md).
+
+## Roadmap
+
+- Microsoft 365 / Outlook (Microsoft Graph)
+- "Ask me first": require your approval before risky actions, such as sending an email
+- More connectors, defined declaratively so new APIs need little code
 
 ## Contributing
 
@@ -109,4 +156,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Security issues: [SECURITY.md](SECURITY.
 
 ## License
 
-[AGPL-3.0](LICENSE).
+[AGPL-3.0](LICENSE). If you run a modified version as a service, you must share your
+changes under the same license. Contributions are accepted under a Contributor License
+Agreement, so the project can also be offered under a commercial license.

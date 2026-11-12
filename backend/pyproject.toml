@@ -1,7 +1,8 @@
 [project]
 name = "zuimcp"
 version = "0.1.0"
-description = "ZuiMCP backend — MCP server and API giving AI agents permission-controlled access to email"
+description = "ZuiMCP backend: one MCP endpoint giving AI agents permission-controlled access to all your apps and APIs"
+license = "AGPL-3.0-only"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
