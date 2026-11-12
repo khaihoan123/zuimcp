@@ -560,9 +560,11 @@ def test_named_account_needing_reauth_says_so_even_with_other_accounts():
         resolve_account(user, "email", "personal", "email.read")
     with pytest.raises(ValueError, match="No active email account matches 'Other'"):
         resolve_account(user, "email", "Other", "email.read")
-    # Not named, and one usable account left: that one is used, as with a
-    # disabled account.
-    assert resolve_account(user, "email", None, "email.read").name == "Work"
+    # Not named: Work is the only usable one, but it is never guessed — the
+    # user may have meant Personal.
+    with pytest.raises(ValueError, match="`account` is required") as err:
+        resolve_account(user, "email", None, "email.read")
+    assert "Personal (account: " in str(err.value) and "needs reconnecting" in str(err.value)
 
 
 def test_temporary_refresh_failure_keeps_the_connection_active(as_user, google):

@@ -212,23 +212,41 @@ def test_same_address_on_another_server_or_for_another_user_is_allowed(db, fake_
     other_user = logged_in(bob).post("/api/connections/imap", json=NEW_ACCOUNT)
 
     assert (other_server.status_code, other_user.status_code) == (201, 201)
+    # Same address, different server: allowed, and reported so the dashboard can warn.
+    assert other_server.json()["same_address_as"] == [imap_rows(db, alice)[0].id]
+    assert other_user.json()["same_address_as"] == []
 
 
-def test_same_address_already_on_gmail_is_refused(db, fake_mail_servers):
-    # IMAP and Gmail for one address open the same mailbox: one account only.
+@pytest.mark.parametrize("host", ["imap.gmail.com", "imap.googlemail.com"])
+def test_google_imap_for_a_connected_gmail_is_refused(db, fake_mail_servers, host):
+    # IMAP on Google's own server is the same mailbox as the Gmail account.
     from tests.test_email_providers import make_gmail_connection
 
     alice = make_user("alice")
     make_gmail_connection(alice, address="Me@Example.com", name="Personal Gmail")
 
-    res = logged_in(alice).post("/api/connections/imap", json=NEW_ACCOUNT)
+    res = logged_in(alice).post("/api/connections/imap", json={**NEW_ACCOUNT, "host": host})
 
     assert res.status_code == 409
     assert res.json()["detail"] == (
         "This address is already connected with Gmail as 'Personal Gmail'. "
-        "Gmail and IMAP reach the same mailbox, so disconnect the Gmail one first."
+        f"{host} is Google's own IMAP server, so it is the same mailbox. "
+        "Keep using the Gmail one, or disconnect it first."
     )
     assert imap_rows(db, alice) == []
+
+
+def test_other_imap_server_for_a_connected_gmail_is_allowed(db, fake_mail_servers):
+    # E.g. the old cPanel mailbox during a move to Gmail: a different mailbox.
+    from tests.test_email_providers import make_gmail_connection
+
+    alice = make_user("alice")
+    gmail_id = make_gmail_connection(alice, address="me@example.com")
+
+    res = logged_in(alice).post("/api/connections/imap", json=NEW_ACCOUNT)  # imap.example.com
+
+    assert res.status_code == 201
+    assert res.json()["same_address_as"] == [gmail_id]
 
 
 # --- audit log -------------------------------------------------------------

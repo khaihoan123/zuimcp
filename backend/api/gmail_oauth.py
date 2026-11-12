@@ -4,7 +4,12 @@ The browser is sent to /start, which redirects to Google; Google sends it back
 to /callback with a one-time code, which we swap for tokens. Both endpoints are
 browser navigations, not fetch() calls, so they never answer with JSON errors:
 they redirect back to the dashboard with `gmail_error=<code>` (or
-`gmail_connected=<name>`), and the dashboard shows the message.
+`gmail_connected=<id>`), and the dashboard shows the message.
+
+Those redirect URLs carry only codes and connection ids, never an email
+address or a display name (which is often an address): URLs end up in web
+server logs and browser history. The dashboard looks names up itself from
+GET /api/connections.
 
 Security:
 - `state` is random, and is kept with the PKCE code_verifier and the user id in
@@ -29,7 +34,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
-from api.connections import DEFAULT_IMAP_CAPABILITIES, mailboxes_with_address
+from api.connections import DEFAULT_IMAP_CAPABILITIES, mailboxes_with_address, same_mailbox
 from core.auth import get_current_user_id
 from core.db import get_db
 from services.email.providers.google_oauth import (
@@ -103,7 +108,7 @@ def _renew_login(db: Session, connection: Connection, credentials: dict) -> Redi
     connection.credentials_encrypted = encrypt_credentials(json.dumps(credentials))
     connection.status = "active"
     db.commit()
-    return _back_to_dashboard(gmail_connected=connection.display_name, reconnected="1")
+    return _back_to_dashboard(gmail_connected=str(connection.id), reconnected="1")
 
 
 @router.get("/start")
@@ -238,21 +243,21 @@ def callback(
         if target is not None:
             expected = _address_of(target)
             if expected.casefold() != address.casefold():
-                return _back_to_dashboard(gmail_error="wrong_account", expected=expected, got=address)
+                return _back_to_dashboard(gmail_error="wrong_account", connection=str(target.id))
             return _renew_login(db, target, credentials)
 
-    # One mailbox, one account (see mailboxes_with_address in api/connections.py).
+    # One mailbox, one account (see same_mailbox in api/connections.py).
     same_address = mailboxes_with_address(db, user_id, address)
-    for existing, _ in same_address:
+    for existing, creds in same_address:
+        if not same_mailbox("gmail", credentials, existing.service_type, creds):
+            continue
         if existing.service_type == "gmail":
             if existing.status == "needs_reauth":
                 # Connect instead of Reconnect on a broken account: same thing.
                 return _renew_login(db, existing, credentials)
-            return _back_to_dashboard(gmail_error="already_connected", existing=existing.display_name)
-    imap_twin = next((c for c, _ in same_address if c.service_type == "imap"), None)
-    if imap_twin:
-        # IMAP and Gmail reach the same mailbox: the agent would see it twice.
-        return _back_to_dashboard(gmail_error="connected_with_imap", existing=imap_twin.display_name)
+            return _back_to_dashboard(gmail_error="already_connected", connection=str(existing.id))
+        # IMAP on Google's own server: the same Gmail mailbox.
+        return _back_to_dashboard(gmail_error="connected_with_google_imap", connection=str(existing.id))
 
     if not credentials["refresh_token"]:
         return _back_to_dashboard(gmail_error="no_refresh_token")
@@ -269,4 +274,9 @@ def callback(
     for capability in GMAIL_CAPABILITIES:
         db.add(Permission(connection_id=connection.id, capability=capability, allowed=False))
     db.commit()
-    return _back_to_dashboard(gmail_connected=connection.display_name)
+
+    result = {"gmail_connected": str(connection.id)}
+    if same_address:
+        # Allowed: e.g. the old cPanel mailbox during a move to Gmail.
+        result["same_address_as"] = ",".join(str(c.id) for c, _ in same_address)
+    return _back_to_dashboard(**result)

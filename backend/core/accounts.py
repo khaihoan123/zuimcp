@@ -4,9 +4,13 @@ Every service (email, Odoo, ...) goes through resolve_account(), so the
 "which account?" rule is the same everywhere:
 
 - `account` given: use exactly that account, or fail. Never fall back to another.
-- `account` empty: allowed only when the user has ONE active account for the
+- `account` empty: allowed only when the user has ONE account for the
   service. With several, the call fails and lists the choices, so an agent can
   never silently act on (e.g. send from) an account it didn't name.
+
+An account that needs reconnecting (status 'needs_reauth', e.g. a revoked
+Gmail login) still counts here: it can't be used, but it must not make the
+other one look like the only choice. Accounts the user disabled don't count.
 
 Either way the account must have the requested capability granted.
 """
@@ -43,31 +47,9 @@ def _service_types(service: str) -> tuple[str, ...]:
         raise ValueError(f"Unknown service '{service}'") from None
 
 
-def _needs_reauth_error(user_id: str, service: str, account: str | None) -> ValueError | None:
-    """An account whose login the provider stopped accepting (status
-    'needs_reauth', e.g. a revoked Gmail token) can't be used, but saying so is
-    clearer than "no account matches". Matches `account` like resolve_account;
-    with no `account`, covers all of them. None if nothing matches."""
-    db = SessionLocal()
-    try:
-        rows = db.execute(
-            text(
-                "SELECT id, display_name FROM connections "
-                "WHERE user_id = :user_id AND status = 'needs_reauth' "
-                "AND service_type = ANY(:service_types) ORDER BY id"
-            ),
-            {"user_id": user_id, "service_types": list(_service_types(service))},
-        ).fetchall()
-    finally:
-        db.close()
-    if account:
-        wanted = account.strip()
-        rows = [r for r in rows if str(r.id) == wanted or r.display_name.casefold() == wanted.casefold()]
-    if not rows:
-        return None
-    names = ", ".join(f"'{r.display_name}'" for r in rows)
+def _needs_reauth_error(service: str, name: str) -> ValueError:
     return ValueError(
-        f"The {service} account {names} needs to be reconnected: the provider no longer "
+        f"The {service} account '{name}' needs to be reconnected: the provider no longer "
         f"accepts its saved login. The user can reconnect it in the ZuiMCP dashboard."
     )
 
@@ -77,11 +59,11 @@ def resolve_account(user_id: str, service: str, account: str | None, capability:
     try:
         rows = db.execute(
             text(
-                "SELECT c.id, c.display_name, c.service_type, c.credentials_encrypted, "
+                "SELECT c.id, c.display_name, c.service_type, c.credentials_encrypted, c.status, "
                 "COALESCE(p.allowed, false) AS allowed "
                 "FROM connections c "
                 "LEFT JOIN permissions p ON p.connection_id = c.id AND p.capability = :capability "
-                "WHERE c.user_id = :user_id AND c.status = 'active' "
+                "WHERE c.user_id = :user_id AND c.status IN ('active', 'needs_reauth') "
                 "AND c.service_type = ANY(:service_types) "
                 "ORDER BY c.id"
             ),
@@ -95,9 +77,7 @@ def resolve_account(user_id: str, service: str, account: str | None, capability:
         db.close()
 
     if not rows:
-        raise _needs_reauth_error(user_id, service, account) or ValueError(
-            f"No active {service} accounts are connected for this user"
-        )
+        raise ValueError(f"No active {service} accounts are connected for this user")
 
     if account:
         wanted = account.strip()
@@ -105,7 +85,7 @@ def resolve_account(user_id: str, service: str, account: str | None, capability:
         if not matches:
             matches = [r for r in rows if r.display_name.casefold() == wanted.casefold()]
         if not matches:
-            raise _needs_reauth_error(user_id, service, account) or ValueError(
+            raise ValueError(
                 f"No active {service} account matches '{account}'. "
                 f"Call list_accounts to see the valid values."
             )
@@ -122,12 +102,19 @@ def resolve_account(user_id: str, service: str, account: str | None, capability:
         permitted = [r for r in rows if r.allowed]
         if not permitted:
             raise ValueError(f"None of this user's {service} accounts allow '{capability}'")
-        options = "\n".join(f"  - {r.display_name} (account: {r.id})" for r in permitted)
+        options = "\n".join(
+            f"  - {r.display_name} (account: {r.id})"
+            + (" — needs reconnecting, can't be used now" if r.status == "needs_reauth" else "")
+            for r in permitted
+        )
         raise ValueError(
             f"This user has several {service} accounts, so `account` is required — it is "
             f"never guessed. Ask the user which one to use if it isn't clear, then retry "
             f"with one of these (accounts that allow '{capability}'):\n{options}"
         )
+
+    if row.status == "needs_reauth":
+        raise _needs_reauth_error(service, row.display_name)
 
     if not row.allowed:
         raise ValueError(

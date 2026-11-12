@@ -54,6 +54,16 @@
 	/** Set after returning from an OAuth connect (e.g. Gmail). */
 	let reconnected = $state(false);
 	let oauthError = $state('');
+	/** Other accounts with the new account's address that are a different
+	 * mailbox (allowed, e.g. old cPanel + new Gmail during a migration). */
+	let sameAddressIds = $state<number[]>([]);
+	let sameAddressNames = $derived(
+		sameAddressIds.map((id) => `'${nameOf(id)}'`).join(', ')
+	);
+
+	function nameOf(id: number | null): string {
+		return connections.find((c) => c.id === id)?.display_name ?? 'this account';
+	}
 
 	/** Error codes the OAuth callback redirects back with (api/gmail_oauth.py). */
 	const oauthErrors: Record<string, string> = {
@@ -66,18 +76,18 @@
 			"Google didn't give access to the mailbox. Try again and keep the Gmail permission ticked."
 	};
 
-	/** Errors that name accounts, built from the extra params sent with them. */
-	function oauthErrorMessage(error: string, params: URLSearchParams): string {
-		const existing = params.get('existing') ?? '';
+	/** Errors that name an account. The URL only carries its id (never an
+	 * address: URLs end up in server logs), so the name comes from the list. */
+	function oauthErrorMessage(error: string, connectionId: number | null): string {
+		const name = nameOf(connectionId);
 		if (error === 'already_connected') {
-			return `This Gmail account is already connected as '${existing}'.`;
+			return `This Gmail account is already connected as '${name}'.`;
 		}
-		if (error === 'connected_with_imap') {
-			return `This address is already connected with IMAP as '${existing}'. Gmail and IMAP reach the same mailbox, so disconnect the IMAP one first (on the Accounts page). Gmail is recommended: no app password needed.`;
+		if (error === 'connected_with_google_imap') {
+			return `This address is already connected with IMAP on Google's own server as '${name}', which is the same mailbox. To use Gmail instead, disconnect that IMAP account first (on the Accounts page). Gmail is recommended: no app password needed.`;
 		}
 		if (error === 'wrong_account') {
-			const expected = params.get('expected') ?? '';
-			return `You signed in to Google as ${params.get('got') ?? ''}, but this account is ${expected}. Click Reconnect again and choose ${expected}.`;
+			return `You signed in to a different Google account than the one '${name}' uses. Click Reconnect again and choose that account.`;
 		}
 		return oauthErrors[error] ?? 'Google sign-in failed. Please try again.';
 	}
@@ -86,27 +96,41 @@
 		return connections.filter((c) => c.service_type === serviceType).length;
 	}
 
+	function idParam(value: string | null): number | null {
+		const id = Number(value);
+		return value && Number.isInteger(id) ? id : null;
+	}
+
 	/** Reads and then removes the result params the OAuth callback added, so a
-	 * page reload doesn't show the message again. */
-	function readOAuthResult() {
+	 * page reload doesn't show the message again. Messages are built after the
+	 * connections load, because the params only hold ids. */
+	function takeOAuthResult() {
 		const url = new URL(window.location.href);
-		const connected = url.searchParams.get('gmail_connected');
-		const error = url.searchParams.get('gmail_error');
-		if (!connected && !error) return;
-		if (connected) {
-			addedName = connected;
-			reconnected = url.searchParams.get('reconnected') === '1';
-		} else if (error) {
-			oauthError = oauthErrorMessage(error, url.searchParams);
-		}
-		for (const key of ['gmail_connected', 'gmail_error', 'reconnected', 'existing', 'expected', 'got']) {
+		const params = new URLSearchParams(url.searchParams);
+		for (const key of ['gmail_connected', 'gmail_error', 'reconnected', 'connection', 'same_address_as']) {
 			url.searchParams.delete(key);
 		}
-		replaceState(url, {});
+		if (params.has('gmail_connected') || params.has('gmail_error')) replaceState(url, {});
+		return params;
+	}
+
+	function showOAuthResult(params: URLSearchParams) {
+		const connected = idParam(params.get('gmail_connected'));
+		const error = params.get('gmail_error');
+		if (connected !== null) {
+			addedName = nameOf(connected);
+			reconnected = params.get('reconnected') === '1';
+			sameAddressIds = (params.get('same_address_as') ?? '')
+				.split(',')
+				.map(idParam)
+				.filter((id): id is number => id !== null);
+		} else if (error) {
+			oauthError = oauthErrorMessage(error, idParam(params.get('connection')));
+		}
 	}
 
 	onMount(async () => {
-		readOAuthResult();
+		const oauthResult = takeOAuthResult();
 		try {
 			const res = await fetch('/api/connections');
 			if (!res.ok) throw new Error('Failed to load connections');
@@ -114,6 +138,7 @@
 		} catch (e) {
 			loadError = e instanceof Error ? e.message : 'Something went wrong';
 		}
+		showOAuthResult(oauthResult);
 	});
 
 	async function copyEndpoint() {
@@ -138,6 +163,7 @@
 		connecting = connector;
 		addError = '';
 		addedName = '';
+		sameAddressIds = [];
 		form = {
 			display_name: '',
 			host: '',
@@ -177,6 +203,7 @@
 			if (!res.ok) throw new Error(body.detail ?? 'Could not connect');
 			connections = [...connections, body];
 			addedName = body.display_name;
+			sameAddressIds = body.same_address_as ?? [];
 			dialogOpen = false;
 		} catch (e) {
 			addError = e instanceof Error ? e.message : 'Something went wrong';
@@ -256,6 +283,18 @@
 				</a>.
 			</span>
 		</div>
+	{/if}
+
+	{#if sameAddressIds.length > 0}
+		<p
+			class="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-400"
+		>
+			This address is also connected as {sameAddressNames}, a different mailbox. That's normal
+			while moving mail (for example from cPanel to Gmail). Your agent will ask which one to use
+			each time, so give them clear names on the
+			<a class="underline underline-offset-4" href="/dashboard/accounts">Accounts page</a>, such as
+			"Old cPanel mailbox".
+		</p>
 	{/if}
 
 	{#if oauthError}

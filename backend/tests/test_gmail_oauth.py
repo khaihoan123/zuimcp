@@ -122,8 +122,9 @@ def test_callback_creates_connection_with_nothing_granted(db, google_ok):
 
     assert res.status_code == 303
     assert res.headers["location"].startswith("/dashboard/connections?")
-    assert query_of(res) == {"gmail_connected": "me@gmail.com"}
     [conn] = gmail_rows(db, user)
+    assert query_of(res) == {"gmail_connected": str(conn.id)}
+    assert "gmail.com" not in res.headers["location"]  # no address in the URL
     assert conn.status == "active"
     assert sorted(p.capability for p in conn.permissions) == [
         "email.draft", "email.mark_seen", "email.read", "email.search", "email.send"]
@@ -177,8 +178,7 @@ def test_callback_rejects_flow_started_by_another_user(db, google_ok):
     assert gmail_rows(db, bob) == [] and gmail_rows(db, alice) == []
 
 
-@pytest.mark.parametrize("age, expected", [(-60, {"gmail_connected": "me@gmail.com"}),
-                                           (1, {"gmail_error": "invalid_state"})])
+@pytest.mark.parametrize("age, expected", [(-60, "gmail_connected"), (1, "gmail_error")])
 def test_callback_rejects_expired_state(db, google_ok, age, expected):
     # The same hand-made cookie works while fresh, so the expired case really
     # fails on the expiry and not on the cookie itself.
@@ -190,7 +190,9 @@ def test_callback_rejects_expired_state(db, google_ok, age, expected):
 
     res = client.get(CALLBACK, params={"code": "c", "state": "s"})
 
-    assert query_of(res) == expected
+    assert expected in query_of(res)
+    if expected == "gmail_error":
+        assert query_of(res) == {"gmail_error": "invalid_state"}
 
 
 def test_user_cancelling_on_google(db, google_ok):
@@ -228,7 +230,7 @@ def test_connecting_a_working_gmail_again_is_refused(db, google_ok):
 
     _, res = connect(browser(user))
 
-    assert query_of(res) == {"gmail_error": "already_connected", "existing": "Personal"}
+    assert query_of(res) == {"gmail_error": "already_connected", "connection": str(existing)}
     [conn] = gmail_rows(db, user)
     assert stored(existing)[1]["refresh_token"] == "refresh-1"  # untouched
 
@@ -243,7 +245,7 @@ def test_account_needing_reauth_gets_its_login_renewed(db, google_ok, via_reconn
     started = client.get(START, params={"account": existing} if via_reconnect_button else None)
     res = client.get(CALLBACK, params={"code": "c", "state": query_of(started)["state"]})
 
-    assert query_of(res) == {"gmail_connected": "Personal", "reconnected": "1"}
+    assert query_of(res) == {"gmail_connected": str(existing), "reconnected": "1"}
     [conn] = gmail_rows(db, user)
     assert conn.id == existing
     assert conn.status == "active"
@@ -260,7 +262,8 @@ def test_reconnect_with_a_different_google_account_is_refused(db, google_ok):
     started = client.get(START, params={"account": existing})
     res = client.get(CALLBACK, params={"code": "c", "state": query_of(started)["state"]})
 
-    assert query_of(res) == {"gmail_error": "wrong_account", "expected": "a@gmail.com", "got": "b@gmail.com"}
+    # Only the id: neither address goes into the URL.
+    assert query_of(res) == {"gmail_error": "wrong_account", "connection": str(existing)}
     [conn] = gmail_rows(db, user)  # no new account for b@gmail.com
     assert (conn.id, conn.status) == (existing, "needs_reauth")
 
@@ -276,13 +279,27 @@ def test_same_address_for_another_user_is_a_separate_connection(db, google_ok):
     assert len(gmail_rows(db, bob)) == 1
 
 
-def test_same_address_already_on_imap_is_refused(db, google_ok):
-    # IMAP and Gmail for one address open the same mailbox: one account only.
+@pytest.mark.parametrize("host", ["imap.gmail.com", "IMAP.googlemail.com."])
+def test_same_address_on_google_imap_is_refused(db, google_ok, host):
+    # IMAP on Google's own server opens the same Gmail mailbox: one account only.
     user = make_user("alice")
-    make_connection(user, name="Me")  # IMAP, address me@example.com
+    imap_id = make_connection(user, name="Me", host=host)  # address me@example.com
     google_ok.route("GET", f"{GMAIL}/profile", httpx.Response(200, json={"emailAddress": "ME@example.com"}))
 
     _, res = connect(browser(user))
 
-    assert query_of(res) == {"gmail_error": "connected_with_imap", "existing": "Me"}
+    assert query_of(res) == {"gmail_error": "connected_with_google_imap", "connection": str(imap_id)}
     assert gmail_rows(db, user) == []
+
+
+def test_same_address_on_another_imap_server_is_allowed(db, google_ok):
+    # E.g. moving from cPanel to Gmail: old mail stays on cPanel, new mail
+    # arrives in Gmail, so for a while they are two different mailboxes.
+    user = make_user("alice")
+    cpanel = make_connection(user, name="Me", host="mail.example.com")  # me@example.com on cPanel
+    google_ok.route("GET", f"{GMAIL}/profile", httpx.Response(200, json={"emailAddress": "me@example.com"}))
+
+    _, res = connect(browser(user))
+
+    [conn] = gmail_rows(db, user)
+    assert query_of(res) == {"gmail_connected": str(conn.id), "same_address_as": str(cpanel)}

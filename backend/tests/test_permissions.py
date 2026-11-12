@@ -161,3 +161,64 @@ def test_get_mailbox_rechecks_host_before_connecting(monkeypatch):
 
     with pytest.raises(UnsafeHostError):
         get_mailbox(user, None, "email.read")
+
+
+# --- accounts that need reconnecting -----------------------------------------
+
+
+def set_status(connection_id: int, status: str) -> None:
+    session = SessionLocal()
+    try:
+        session.get(Connection, connection_id).status = status
+        session.commit()
+    finally:
+        session.close()
+
+
+def test_broken_account_still_makes_account_required():
+    # One of two mailboxes needs reconnecting. Without `account`, the working
+    # one must not be picked silently: the user may have meant the broken one.
+    user = make_user("alice")
+    make_connection(user, name="Work", granted=("email.send",))
+    home = make_connection(user, name="Home", granted=("email.send",))
+    set_status(home, "needs_reauth")
+
+    with pytest.raises(ValueError, match="`account` is required") as err:
+        resolve_account(user, "email", None, "email.send")
+    assert "Work (account: " in str(err.value)
+    assert f"Home (account: {home}) — needs reconnecting" in str(err.value)
+    assert email_of(user, "Work", "email.send") == "work@example.com"
+
+
+def test_only_account_needing_reconnect_says_so():
+    user = make_user("alice")
+    work = make_connection(user, name="Work", granted=("email.read",))
+    set_status(work, "needs_reauth")
+
+    with pytest.raises(ValueError, match="'Work' needs to be reconnected"):
+        resolve_account(user, "email", None, "email.read")
+
+
+def test_disabled_account_still_does_not_count():
+    # Disabled on purpose by the user: ignored, as before.
+    user = make_user("alice")
+    make_connection(user, name="Work", granted=("email.read",))
+    make_connection(user, name="Old", granted=("email.read",), status="disabled")
+
+    assert email_of(user, None, "email.read") == "work@example.com"
+
+
+def test_broken_odoo_account_also_makes_account_required():
+    from tests.test_odoo import make_odoo_connection
+
+    user = make_user("alice")
+    make_odoo_connection(user, name="Shop", granted=("odoo.read",))
+    test_db = make_odoo_connection(user, name="Test shop", granted=("odoo.read",))
+    set_status(test_db, "needs_reauth")
+
+    with pytest.raises(ValueError, match="`account` is required"):
+        resolve_account(user, "odoo", None, "odoo.read")
+    with pytest.raises(ValueError, match="'Test shop' needs to be reconnected"):
+        resolve_account(user, "odoo", "Test shop", "odoo.read")
+    assert resolve_account(user, "odoo", "Shop", "odoo.read").name == "Shop"
+

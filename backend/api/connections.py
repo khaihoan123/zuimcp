@@ -43,6 +43,13 @@ class ConnectionOut(BaseModel):
     permissions: list[PermissionOut]
 
 
+class CreatedConnectionOut(ConnectionOut):
+    # Ids of the user's other mailboxes with the same address that are a
+    # different mailbox (allowed, e.g. old cPanel + new Gmail during a
+    # migration). The dashboard warns that the agent must then pick one.
+    same_address_as: list[int] = []
+
+
 class CreateImapConnectionIn(BaseModel):
     display_name: str
     host: str
@@ -77,14 +84,8 @@ def _get_owned_connection(db: Session, connection_id: int, user_id: str) -> Conn
 
 def mailboxes_with_address(db: Session, user_id: str, address: str) -> list[tuple[Connection, dict]]:
     """The user's mailboxes (any provider, any status) whose address equals
-    `address`, ignoring case, with their decrypted credentials.
-
-    Rule: one mailbox, one account. The same mailbox twice would make the agent
-    ask "which one?" every time and could repeat actions. IMAP and Gmail for
-    one address count as the same mailbox: mail for an address arrives in one
-    place, and both just open it. Only the same address on two different IMAP
-    servers is allowed (e.g. while moving a domain to a new mail host).
-    """
+    `address`, ignoring case, with their decrypted credentials. Use
+    same_mailbox() to tell which of them is really the same mailbox."""
     rows = (
         db.query(Connection)
         .filter(Connection.user_id == user_id, Connection.service_type.in_(SERVICE_TYPES["email"]))
@@ -100,12 +101,39 @@ def mailboxes_with_address(db: Session, user_id: str, address: str) -> list[tupl
     return found
 
 
+# IMAP servers that open a Gmail mailbox.
+GOOGLE_IMAP_HOSTS = {"imap.gmail.com", "imap.googlemail.com"}
+
+
+def _host(creds: dict) -> str:
+    return creds.get("host", "").strip().rstrip(".").casefold()
+
+
+def same_mailbox(type_a: str, creds_a: dict, type_b: str, creds_b: dict) -> bool:
+    """Whether two connections WITH THE SAME ADDRESS open the same mailbox.
+
+    Rule: one mailbox, one account. The same mailbox twice makes the agent ask
+    "which one?" for nothing, and could repeat actions on it. But one address
+    can be two real mailboxes for a while, e.g. during a cPanel -> Gmail
+    migration: old mail stays on cPanel, new mail arrives in Gmail. So:
+    - Gmail + Gmail: same mailbox.
+    - Gmail + IMAP: same only if the IMAP server is Google's (imap.gmail.com).
+    - IMAP + IMAP: same only on the same server.
+    """
+    if type_a == type_b == "gmail":
+        return True
+    if type_a == type_b == "imap":
+        return _host(creds_a) == _host(creds_b)
+    imap_creds = creds_a if type_a == "imap" else creds_b
+    return _host(imap_creds) in GOOGLE_IMAP_HOSTS
+
+
 @router.get("", response_model=list[ConnectionOut])
 def list_connections(user_id: str = Depends(get_current_user_id), db: Session = Depends(get_db)):
     return db.query(Connection).filter(Connection.user_id == user_id).all()
 
 
-@router.post("/imap", response_model=ConnectionOut, status_code=201)
+@router.post("/imap", response_model=CreatedConnectionOut, status_code=201)
 def create_imap_connection(
     body: CreateImapConnectionIn,
     user_id: str = Depends(get_current_user_id),
@@ -117,22 +145,25 @@ def create_imap_connection(
     except UnsafeHostError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    # One mailbox, one account (see mailboxes_with_address). Checked before
-    # logging in, so a duplicate fails fast.
-    for existing, creds in mailboxes_with_address(db, user_id, body.email):
+    # One mailbox, one account (see same_mailbox). Checked before logging in,
+    # so a duplicate fails fast.
+    same_address = mailboxes_with_address(db, user_id, body.email)
+    for existing, creds in same_address:
+        if not same_mailbox("imap", {"host": body.host}, existing.service_type, creds):
+            continue
         if existing.service_type == "gmail":
             raise HTTPException(
                 status_code=409,
                 detail=(
                     f"This address is already connected with Gmail as '{existing.display_name}'. "
-                    f"Gmail and IMAP reach the same mailbox, so disconnect the Gmail one first."
+                    f"{body.host} is Google's own IMAP server, so it is the same mailbox. "
+                    f"Keep using the Gmail one, or disconnect it first."
                 ),
             )
-        if creds.get("host", "").strip().casefold() == body.host.strip().casefold():
-            raise HTTPException(
-                status_code=409,
-                detail=f"This mailbox is already connected as '{existing.display_name}'.",
-            )
+        raise HTTPException(
+            status_code=409,
+            detail=f"This mailbox is already connected as '{existing.display_name}'.",
+        )
 
     # Fail fast — verify both protocols actually work before ever storing
     # credentials. IMAP first since it's required; SMTP failing after IMAP
@@ -185,7 +216,9 @@ def create_imap_connection(
 
     db.commit()
     db.refresh(connection)
-    return connection
+    out = CreatedConnectionOut.model_validate(connection)
+    out.same_address_as = [c.id for c, _ in same_address]
+    return out
 
 
 @router.patch("/{connection_id}", response_model=ConnectionOut)
