@@ -5,6 +5,8 @@
 
 **One safe MCP endpoint for all your apps and APIs, with you deciding exactly what each AI agent may do.**
 
+![Connected accounts, each with its own list of actions the agent may take](docs/screenshots/accounts.png)
+
 ZuiMCP is a multi-tenant [MCP](https://modelcontextprotocol.io) platform. You connect your
 accounts once, choose what an agent may do on each one (read, search, draft, send, create,
 update, delete), and add a single URL to Claude, n8n or any MCP client. The agent signs in
@@ -30,6 +32,11 @@ ZuiMCP sits in between:
   agent's tool list, and they're refused anyway if called.
 - **One endpoint for everything.** Add `/mcp` once; email and Odoo tools appear under it.
 
+Every call is logged. Here, an agent tried to send from an account that may only draft,
+and to delete Odoo records it may only read and create. Both were refused:
+
+![Activity log with two refused calls](docs/screenshots/activity.png)
+
 ## Features
 
 - **Connectors**
@@ -45,6 +52,16 @@ ZuiMCP sits in between:
   - Odoo requests never follow redirects.
 
 ## How it works
+
+![Connections page with the single MCP endpoint and the available connectors](docs/screenshots/connections.png)
+
+<details>
+<summary>More screenshots</summary>
+
+![Dashboard overview](docs/screenshots/dashboard.png)
+![Landing page](docs/screenshots/landing.png)
+
+</details>
 
 ```mermaid
 flowchart LR
