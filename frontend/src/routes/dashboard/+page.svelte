@@ -20,6 +20,7 @@
 		service_type: string;
 		display_name: string;
 		status: string;
+		identity: string | null;
 		permissions: Permission[];
 	};
 
@@ -125,7 +126,12 @@
 								<ConnectorIcon {connector} />
 							{/if}
 							<div class="min-w-0 flex-1">
-								<p class="truncate font-medium">{conn.display_name}</p>
+								<p class="truncate font-medium">
+									{conn.display_name}
+									{#if conn.identity}
+										<span class="font-normal text-muted-foreground">· {conn.identity}</span>
+									{/if}
+								</p>
 								<p class="truncate text-sm text-muted-foreground">
 									{#if conn.permissions.some((p) => p.allowed)}
 										{sortPermissions(conn.permissions.filter((p) => p.allowed))

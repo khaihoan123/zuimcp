@@ -1,10 +1,11 @@
 import json
 import logging
 import smtplib
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException
 from imap_tools import MailBox, MailboxLoginError
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 from sqlalchemy.orm import Session
 
 from core.auth import get_current_user_id
@@ -34,13 +35,45 @@ class PermissionOut(BaseModel):
     allowed: bool
 
 
+def connection_identity(service_type: str, creds: dict) -> str | None:
+    """Which mailbox or Odoo user an account is, for the dashboard. Built from a
+    few safe fields only, never passwords, keys or tokens."""
+    if service_type in SERVICE_TYPES["email"]:
+        return creds.get("email") or None
+    if service_type == "odoo":
+        login, url, database = creds.get("login"), creds.get("url"), creds.get("database")
+        if not (login and url and database):
+            return None
+        return f"{login} on {urlsplit(url).hostname or url} (database {database})"
+    return None
+
+
 class ConnectionOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
     service_type: str
     display_name: str
     status: str
+    identity: str | None = None
     permissions: list[PermissionOut]
+
+    @model_validator(mode="before")
+    @classmethod
+    def _from_connection(cls, data):
+        if not isinstance(data, Connection):
+            return data
+        try:
+            creds = json.loads(decrypt_credentials(data.credentials_encrypted))
+        except Exception:
+            creds = {}
+        return {
+            "id": data.id,
+            "service_type": data.service_type,
+            "display_name": data.display_name,
+            "status": data.status,
+            "identity": connection_identity(data.service_type, creds),
+            "permissions": [PermissionOut.model_validate(p) for p in data.permissions],
+        }
 
 
 class CreatedConnectionOut(ConnectionOut):

@@ -15,6 +15,8 @@
 		service_type: string;
 		display_name: string;
 		status: string;
+		/** The mailbox address, or the Odoo login, host and database. */
+		identity: string | null;
 		permissions: Permission[];
 	};
 
@@ -143,6 +145,9 @@
 						<button class="truncate font-medium hover:underline" onclick={() => startRename(conn)}>
 							{conn.display_name}
 						</button>
+					{/if}
+					{#if conn.identity}
+						<p class="truncate text-sm" title={conn.identity}>{conn.identity}</p>
 					{/if}
 					<p class="text-sm text-muted-foreground">
 						{connector?.label ?? conn.service_type} ·

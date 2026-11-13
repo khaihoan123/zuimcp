@@ -279,3 +279,23 @@ def test_audit_log_limit_is_clamped(db, limit, expected):
 
     assert res.status_code == 200
     assert len(res.json()) == expected
+
+
+# --- account identity --------------------------------------------------------
+
+
+def test_list_shows_which_account_without_secrets():
+    from tests.test_odoo import make_odoo_connection
+
+    user = make_user("alice")
+    make_connection(user, name="Work", granted=("email.read",))
+    make_odoo_connection(user, name="Shop", granted=("odoo.read",))
+
+    res = logged_in(user).get("/api/connections")
+    assert res.status_code == 200
+    by_name = {c["display_name"]: c for c in res.json()}
+    assert by_name["Work"]["identity"] == "work@example.com"
+    assert by_name["Shop"]["identity"] == "admin@example.com on odoo.example.com (database shop)"
+    body = res.text
+    for secret in ("secret", "api-key-123", "api_key", "password", "credentials"):
+        assert secret not in body
