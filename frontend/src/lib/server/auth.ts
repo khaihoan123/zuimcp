@@ -87,14 +87,19 @@ export const auth = betterAuth({
 			// dynamic client registration. Public clients only (no client
 			// secret issued), which is correct for this flow.
 			allowUnauthenticatedClientRegistration: true,
-			// Must exactly equal the "resource" value an MCP client requests
-			// (RFC 8707), which is the full protected-resource identifier —
-			// i.e. FastAPI's base URL + its /mcp path, NOT the bare
-			// origin. Mismatch here fails token exchange with "requested
-			// resource invalid" and silently falls back to an opaque
-			// (non-JWT) access_token instead of erroring, which is easy to
-			// miss.
-			validAudiences: [process.env.MCP_RESOURCE_INDICATOR ?? 'http://localhost:8000/mcp'],
+			// The protected resources tokens may be issued for. Must exactly
+			// equal the "resource" value an MCP client requests (RFC 8707):
+			// FastAPI's base URL + its /mcp path, NOT the bare origin. Any
+			// other value is refused with "requested resource ... is not
+			// configured". Seeded into the oauthResource table at startup
+			// (insert-only, so a changed URL is added, never overwritten).
+			// Replaces `validAudiences`, which newer versions ignore.
+			resources: [process.env.MCP_RESOURCE_INDICATOR ?? 'http://localhost:8000/mcp'],
+			// Dynamically registered clients (Claude, etc.) can't be linked to
+			// a resource by hand, so any registered client may request /mcp.
+			// What the agent can actually do is still limited per account by
+			// the user's permissions in the backend.
+			enforcePerClientResources: false,
 			scopes: ['openid', 'profile', 'email', 'offline_access']
 		})
 	]

@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from api.audit_log import router as audit_log_router
 from api.connections import router as connections_router
 from api.gmail_oauth import router as gmail_oauth_router
+from core.mcp_auth import enable_stdio_mode
 from core.mcp_server import MCP_PATH, auth, mcp
 import services.email.service  # noqa: F401  registers the email_* tools on `mcp`
 import services.odoo.service  # noqa: F401  registers the odoo_* tools on `mcp`
@@ -35,6 +36,7 @@ def main():
     # If "stdio" is passed as an argument, run the MCP stdio server
     if len(sys.argv) > 1 and sys.argv[1] == "stdio":
         sys.argv.pop(1)
+        enable_stdio_mode()
         mcp.run()
     else:
         # Otherwise, run the combined FastAPI and MCP application using Uvicorn
