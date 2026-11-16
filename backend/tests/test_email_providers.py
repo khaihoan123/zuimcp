@@ -271,8 +271,7 @@ class FakeMailBox:
 @pytest.fixture
 def fake_imap(monkeypatch):
     FakeMailBox.instances = []
-    monkeypatch.setattr(imap, "MailBox", FakeMailBox)
-    monkeypatch.setattr(imap, "ensure_public_host", lambda host, port: None)
+    monkeypatch.setattr(imap, "PublicMailBox", FakeMailBox)
     sent = []
     monkeypatch.setattr(imap, "send_message", lambda creds, msg: sent.append((creds, msg)))
     return SimpleNamespace(sent=sent)

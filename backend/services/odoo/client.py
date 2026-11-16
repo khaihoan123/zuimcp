@@ -33,7 +33,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from core.config import config
-from core.net import MAIL_CONNECT_TIMEOUT, ensure_public_host
+from core.net import MAIL_CONNECT_TIMEOUT, host_and_port, public_http_target  # noqa: F401  host_and_port is used by api/connections.py
 
 # Odoo 19 is the first release with the JSON-2 API.
 JSON2_MIN_VERSION = 19
@@ -98,11 +98,6 @@ def normalize_url(url: str) -> str:
     return url
 
 
-def host_and_port(url: str) -> tuple[str, int]:
-    parts = urlsplit(url)
-    return parts.hostname, parts.port or (443 if parts.scheme == "https" else 80)
-
-
 def check_model_name(model: str) -> str:
     if not MODEL_NAME.match(model or ""):
         raise OdooError(f"'{model}' is not a valid Odoo model name (expected e.g. res.partner)")
@@ -110,12 +105,13 @@ def check_model_name(model: str) -> str:
 
 
 def _post(url: str, payload: dict, headers: dict | None = None) -> httpx.Response:
-    """One POST, after re-checking the host. Network errors become OdooError
-    with a generic message: the raw exception can carry internal details."""
-    ensure_public_host(*host_and_port(url), what="Odoo server")
+    """One POST, after re-checking the host and pinned to the checked address
+    (core.net). Network errors become OdooError with a generic message: the
+    raw exception can carry internal details."""
+    request_url, headers, extensions = public_http_target(url, headers, what="Odoo server")
     try:
         with httpx.Client(timeout=TIMEOUT, follow_redirects=False, transport=TRANSPORT) as http:
-            return http.post(url, json=payload, headers=headers)
+            return http.post(request_url, json=payload, headers=headers, extensions=extensions)
     except httpx.TimeoutException:
         raise OdooError("Odoo did not answer in time") from None
     except httpx.HTTPError:

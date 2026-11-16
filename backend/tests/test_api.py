@@ -49,8 +49,8 @@ class FakeSMTP(FakeMailBox):
 @pytest.fixture
 def fake_mail_servers(monkeypatch):
     monkeypatch.setattr(connections, "ensure_public_host", lambda host, port: None)
-    monkeypatch.setattr(connections, "MailBox", FakeMailBox)
-    monkeypatch.setattr(connections.smtplib, "SMTP", FakeSMTP)
+    monkeypatch.setattr(connections, "PublicMailBox", FakeMailBox)
+    monkeypatch.setattr(connections, "PublicSMTP", FakeSMTP)
 
 
 # --- authentication --------------------------------------------------------
@@ -137,8 +137,8 @@ def test_private_mail_host_is_refused_before_connecting(monkeypatch):
     def must_not_connect(*args, **kwargs):
         raise AssertionError("connected to a private address")
 
-    monkeypatch.setattr(connections, "MailBox", must_not_connect)
-    monkeypatch.setattr(connections.smtplib, "SMTP", must_not_connect)
+    monkeypatch.setattr(connections, "PublicMailBox", must_not_connect)
+    monkeypatch.setattr(connections, "PublicSMTP", must_not_connect)
     alice = make_user("alice")
 
     res = logged_in(alice).post("/api/connections/imap", json={**NEW_ACCOUNT, "host": "127.0.0.1"})
@@ -153,7 +153,7 @@ def test_connection_errors_do_not_leak_server_details(monkeypatch):
             raise OSError("banner: PostgreSQL 17.2 on db:5432")
 
     monkeypatch.setattr(connections, "ensure_public_host", lambda host, port: None)
-    monkeypatch.setattr(connections, "MailBox", Unreachable)
+    monkeypatch.setattr(connections, "PublicMailBox", Unreachable)
     alice = make_user("alice")
 
     res = logged_in(alice).post("/api/connections/imap", json=NEW_ACCOUNT)
@@ -194,7 +194,7 @@ def test_duplicate_is_refused_before_logging_in(monkeypatch):
         raise AssertionError("logged in to check a duplicate")
 
     monkeypatch.setattr(connections, "ensure_public_host", lambda host, port: None)
-    monkeypatch.setattr(connections, "MailBox", must_not_connect)
+    monkeypatch.setattr(connections, "PublicMailBox", must_not_connect)
 
     res = logged_in(alice).post(
         "/api/connections/imap", json={**NEW_ACCOUNT, "email": "work@example.com"}

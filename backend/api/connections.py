@@ -1,16 +1,17 @@
 import json
 import logging
 import smtplib
+import ssl
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException
-from imap_tools import MailBox, MailboxLoginError
+from imap_tools import MailboxLoginError
 from pydantic import BaseModel, ConfigDict, model_validator
 from sqlalchemy.orm import Session
 
 from core.auth import get_current_user_id
 from core.db import get_db
-from core.net import MAIL_CONNECT_TIMEOUT, UnsafeHostError, ensure_public_host
+from core.net import PublicMailBox, PublicSMTP, UnsafeHostError, ensure_public_host
 from core.accounts import SERVICE_TYPES
 from core.security import decrypt_credentials, encrypt_credentials
 from models import Connection, Permission
@@ -27,6 +28,15 @@ DEFAULT_IMAP_CAPABILITIES = [
     "email.draft",
     "email.send",
 ]
+
+
+# Certificates are verified (core.net.tls_context). Shared hosting often has a
+# certificate for the provider's server name rather than mail.<your domain>.
+CERT_MISMATCH = (
+    "The {kind} server's security certificate isn't valid for '{host}'. "
+    "Use the server name your mail provider gives (often their own host name, "
+    "e.g. server123.provider.com), not a custom one."
+)
 
 
 class PermissionOut(BaseModel):
@@ -204,22 +214,24 @@ def create_imap_connection(
     # generic: echoing the raw exception would leak server banners and make
     # the form a handy network-probing tool. The real cause goes to the log.
     try:
-        with MailBox(body.host, body.port, timeout=MAIL_CONNECT_TIMEOUT).login(
-            body.email, body.password
-        ):
+        with PublicMailBox(body.host, body.port).login(body.email, body.password):
             pass
     except MailboxLoginError:
         raise HTTPException(status_code=400, detail="IMAP login failed — check the email and password")
+    except ssl.SSLCertVerificationError:
+        raise HTTPException(status_code=400, detail=CERT_MISMATCH.format(kind="IMAP", host=body.host))
     except Exception:
         logger.warning("IMAP connection test failed for %s:%s", body.host, body.port, exc_info=True)
         raise HTTPException(status_code=400, detail="Could not connect to the IMAP server — check the host and port")
 
     try:
-        with smtplib.SMTP(body.smtp_host, body.smtp_port, timeout=MAIL_CONNECT_TIMEOUT) as smtp:
+        with PublicSMTP(body.smtp_host, body.smtp_port) as smtp:
             smtp.starttls()
             smtp.login(body.email, body.password)
     except smtplib.SMTPAuthenticationError:
         raise HTTPException(status_code=400, detail="SMTP login failed — check the email and password")
+    except ssl.SSLCertVerificationError:
+        raise HTTPException(status_code=400, detail=CERT_MISMATCH.format(kind="SMTP", host=body.smtp_host))
     except Exception:
         logger.warning("SMTP connection test failed for %s:%s", body.smtp_host, body.smtp_port, exc_info=True)
         raise HTTPException(status_code=400, detail="Could not connect to the SMTP server — check the host and port")

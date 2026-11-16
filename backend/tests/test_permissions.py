@@ -7,6 +7,7 @@ import pytest
 
 from core.accounts import granted_capabilities, list_user_accounts, resolve_account
 from core.db import SessionLocal
+from core import net
 from core.net import UnsafeHostError
 from core.security import encrypt_credentials
 from models import Connection
@@ -155,7 +156,7 @@ def test_get_mailbox_rechecks_host_before_connecting(monkeypatch):
     def must_not_connect(*args, **kwargs):
         raise AssertionError("connected to a private address")
 
-    monkeypatch.setattr(imap, "MailBox", must_not_connect)
+    monkeypatch.setattr(net.socket, "create_connection", must_not_connect)
     user = make_user("alice")
     make_connection(user, granted=("email.read",), host="127.0.0.1")
 

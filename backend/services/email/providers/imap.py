@@ -4,11 +4,11 @@ stays a separate file so SMTP can later get its own login (see the TODO there)."
 import datetime
 from email.message import Message
 
-from imap_tools import AND, MailBox, MailMessage, MailMessageFlags
+from imap_tools import AND, MailBox, MailMessage, MailMessageFlags  # MailBox: type hints only
 
 from core.accounts import resolve_account
 from core.config import LOCAL_EMAIL, LOCAL_PASS, config
-from core.net import MAIL_CONNECT_TIMEOUT, ensure_public_host
+from core.net import PublicMailBox
 from services.email.providers.base import EmailProvider, MessageFilter, snippet_of
 from services.email.providers.smtp import send_message
 
@@ -42,11 +42,9 @@ def imap_credentials(stored: dict, account_name: str) -> dict:
 
 
 def open_mailbox(creds: dict) -> MailBox:
-    if not creds["local"]:
-        # Re-checked at every connect, not just when the account was saved:
-        # DNS can change after the fact (rebinding).
-        ensure_public_host(creds["host"], creds["port"])
-    return MailBox(creds["host"], creds["port"], timeout=MAIL_CONNECT_TIMEOUT).login(
+    # Checked and pinned at every connect (core.net), not just when the account
+    # was saved: DNS can change after the fact.
+    return PublicMailBox(creds["host"], creds["port"], check_public=not creds["local"]).login(
         creds["email"], creds["password"]
     )
 

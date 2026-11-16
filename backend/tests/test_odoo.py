@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 from api import connections
 from core.accounts import list_user_accounts, resolve_account
 from core.db import SessionLocal
+from core import net
 from core.net import UnsafeHostError
 from core.security import decrypt_credentials, encrypt_credentials
 from main import app
@@ -147,7 +148,7 @@ class FakeOdoo:
 @pytest.fixture
 def no_dns(monkeypatch):
     """odoo.example.com isn't real: skip the public-host DNS check."""
-    monkeypatch.setattr(odoo_client, "ensure_public_host", lambda host, port, what="": None)
+    monkeypatch.setattr(net, "ensure_public_host", lambda host, port, what="": None)
     monkeypatch.setattr(connections, "ensure_public_host", lambda host, port, what="": None)
 
 
