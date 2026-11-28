@@ -57,7 +57,7 @@ an OAuth app and set its redirect URI to
 
 ## Gmail mailboxes (optional)
 
-"Connect with Google" on the Connections page needs its **own** Google OAuth
+"Connect with Google" on the Connectors page needs its **own** Google OAuth
 client, separate from the sign-in one above. Leave `GMAIL_OAUTH_CLIENT_ID`
 blank to turn Gmail off.
 

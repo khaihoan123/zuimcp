@@ -2,7 +2,6 @@
 	import { onMount } from 'svelte';
 	import { replaceState } from '$app/navigation';
 	import CheckIcon from '@lucide/svelte/icons/check';
-	import CopyIcon from '@lucide/svelte/icons/copy';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import ConnectorIcon from '$lib/components/connector-icon.svelte';
 	import { Badge } from '$lib/components/ui/badge';
@@ -20,8 +19,6 @@
 		status: string;
 		permissions: { capability: string; allowed: boolean }[];
 	};
-
-	let { data } = $props();
 
 	let connections = $state<Connection[]>([]);
 	let loadError = $state('');
@@ -47,9 +44,6 @@
 
 	/** Odoo 8 to 19 — the backend detects the version and picks the API. */
 	let odooForm = $state({ display_name: '', url: '', database: '', login: '', api_key: '' });
-
-	let copied = $state(false);
-	let copyFailed = $state(false);
 
 	/** Set after returning from an OAuth connect (e.g. Gmail). */
 	let reconnected = $state(false);
@@ -141,19 +135,6 @@
 		showOAuthResult(oauthResult);
 	});
 
-	async function copyEndpoint() {
-		copyFailed = false;
-		try {
-			await navigator.clipboard.writeText(data.mcpEndpoint);
-			copied = true;
-			setTimeout(() => (copied = false), 2000);
-		} catch {
-			// Clipboard is blocked on insecure origins and without permission —
-			// tell the user rather than silently doing nothing.
-			copyFailed = true;
-		}
-	}
-
 	function openConnect(connector: Connector) {
 		if (connector.oauthStart) {
 			// OAuth connectors have no form: the provider's own sign-in page asks.
@@ -214,52 +195,15 @@
 </script>
 
 <svelte:head>
-	<title>Connections</title>
+	<title>Connectors</title>
 </svelte:head>
 
 <div>
-	<h1 class="text-2xl font-semibold">Connections</h1>
+	<h1 class="text-2xl font-semibold">Connectors</h1>
 	<p class="mt-2 text-sm text-muted-foreground">
-		Pick a connector to link an account. You can connect several accounts per service.
+		Pick a connector to link an account. You can connect several accounts per service, and
+		they all work through your one MCP endpoint (top right).
 	</p>
-
-	<!-- One endpoint for everything: the agent sees the tools each account allows. -->
-	<Card.Root class="mt-6" size="sm">
-		<Card.Content class="flex flex-col gap-2">
-			<div class="flex items-center gap-2">
-				<p class="text-sm font-medium">Your MCP endpoint</p>
-				<Badge variant="secondary">Live</Badge>
-			</div>
-			<div class="flex items-center gap-2">
-				<code
-					class="min-w-0 flex-1 truncate rounded-lg border border-border bg-muted/50 px-3 py-2 font-mono text-sm"
-				>
-					{data.mcpEndpoint}
-				</code>
-				<Button
-					variant="outline"
-					size="icon"
-					onclick={copyEndpoint}
-					aria-label="Copy MCP endpoint URL"
-				>
-					{#if copied}
-						<CheckIcon />
-					{:else}
-						<CopyIcon />
-					{/if}
-				</Button>
-			</div>
-			{#if copyFailed}
-				<p class="text-sm text-destructive">
-					Couldn't access the clipboard — select the URL and copy it manually.
-				</p>
-			{/if}
-			<p class="text-sm text-muted-foreground">
-				One URL for all your accounts. Add it as a remote MCP server in your agent's config — auth
-				is OAuth, so there's no API key. Your agent only sees the actions you allow on each account.
-			</p>
-		</Card.Content>
-	</Card.Root>
 
 	{#if addedName && reconnected}
 		<div
@@ -317,7 +261,7 @@
 			</div>
 
 
-			<div class="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+			<div class="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
 				{#each category.connectors as connector (connector.id)}
 					{@const count = countFor(connector.id)}
 					{#if connector.availability === 'available'}

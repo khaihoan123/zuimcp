@@ -2,7 +2,8 @@
 	import { page } from '$app/state';
 	import { goto, invalidateAll } from '$app/navigation';
 	import { authClient } from '$lib/auth-client';
-	import { SITE_NAME } from '$lib/config';
+	import Brand from '$lib/components/brand.svelte';
+	import McpEndpoint from '$lib/components/mcp-endpoint.svelte';
 	import HistoryIcon from '@lucide/svelte/icons/history';
 	import LayoutDashboardIcon from '@lucide/svelte/icons/layout-dashboard';
 	import LogOutIcon from '@lucide/svelte/icons/log-out';
@@ -15,7 +16,7 @@
 
 	const navItems = [
 		{ href: '/dashboard', label: 'Overview', icon: LayoutDashboardIcon, exact: true },
-		{ href: '/dashboard/connections', label: 'Connections', icon: PlugIcon, exact: false },
+		{ href: '/dashboard/connectors', label: 'Connectors', icon: PlugIcon, exact: false },
 		{
 			href: '/dashboard/accounts',
 			label: 'Connected accounts',
@@ -44,15 +45,10 @@
 <div class="flex min-h-screen flex-col">
 	<header class="border-b border-border bg-card">
 		<div class="flex h-16 items-center gap-4 px-6">
-			<a class="flex items-center gap-2 font-semibold tracking-tight" href="/">
-				<span class="grid size-7 place-items-center rounded-lg bg-primary text-primary-foreground">
-					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="size-4">
-						<path d="M4 7h16M4 12h10M4 17h7" stroke-linecap="round" />
-					</svg>
-				</span>
-				{SITE_NAME}
-			</a>
-			<div class="flex-1"></div>
+			<Brand />
+			<div class="flex min-w-0 flex-1 justify-end">
+				<McpEndpoint url={data.mcpEndpoint} />
+			</div>
 
 			<DropdownMenu.Root>
 				<DropdownMenu.Trigger
@@ -105,7 +101,9 @@
 		</aside>
 
 		<main class="min-w-0 flex-1">
-			<div class="mx-auto w-full max-w-7xl px-6 py-10">
+			<!-- Full width: each page sets its own (forms and cards cap themselves,
+			     tables like Activity use it all). -->
+			<div class="w-full px-6 py-10">
 				{@render children()}
 			</div>
 		</main>

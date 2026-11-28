@@ -112,7 +112,7 @@
 					Browse the connector catalogue to link your first account. Your agent can't reach anything
 					until you do.
 				</p>
-				<Button href="/dashboard/connections">Browse connectors</Button>
+				<Button href="/dashboard/connectors">Browse connectors</Button>
 			</Card.Content>
 		</Card.Root>
 	{:else}
