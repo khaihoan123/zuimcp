@@ -10,13 +10,18 @@ Every service (email, Odoo, ...) goes through resolve_account(), so the
 
 An account that needs reconnecting (status 'needs_reauth', e.g. a revoked
 Gmail login) still counts here: it can't be used, but it must not make the
-other one look like the only choice. Accounts the user disabled don't count.
+other one look like the only choice. Accounts the user paused (status
+'disabled') don't count, but naming one says it is paused.
 
 Either way the account must have the requested capability granted.
 """
 
 import json
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
+
+from urllib.parse import urlsplit
 
 from sqlalchemy import text
 
@@ -32,12 +37,59 @@ SERVICE_TYPES: dict[str, tuple[str, ...]] = {
 SERVICE_TYPES["odoo"] = ("odoo",)
 
 
+def connection_identity(service_type: str, creds: dict, with_version: bool = False) -> str | None:
+    """Which mailbox or Odoo user an account is, e.g. "me@x.com" or "me@x.com on
+    shop.odoo.com (database shop)". Built from a few safe fields only, never
+    passwords, keys or tokens. with_version adds the Odoo version, for the log."""
+    if service_type in SERVICE_TYPES["email"]:
+        return creds.get("email") or None
+    if service_type == "odoo":
+        login, url, database = creds.get("login"), creds.get("url"), creds.get("database")
+        if not (login and url and database):
+            return None
+        version = f", Odoo {creds['version']}" if with_version and creds.get("version") else ""
+        return f"{login} on {urlsplit(url).hostname or url} (database {database}{version})"
+    return None
+
+
+def account_target(service_type: str, credentials_encrypted: str) -> str | None:
+    """What an account points at, for the activity log (connection_identity)."""
+    try:
+        creds = json.loads(decrypt_credentials(credentials_encrypted))
+    except Exception:
+        return None
+    return connection_identity(service_type, creds, with_version=True)
+
+
 @dataclass
 class Account:
     id: int
     name: str
     service_type: str
     credentials: dict
+
+
+# Which account the current MCP tool call resolved to, so a login the provider
+# refuses mid-call can flag that account (core.middleware.LoginRefusedMiddleware).
+# Holds a dict, not the id itself: sync tools run in a worker thread with a copy
+# of the context, and only a shared object carries the id back.
+_account_used: ContextVar[dict | None] = ContextVar("zuimcp_account_used", default=None)
+
+
+@contextmanager
+def track_account_used():
+    """Yields a dict that gets the `id`, `name`, `service_type` and `target` of
+    the account the call used. Nested uses share the outermost dict."""
+    holder = _account_used.get()
+    if holder is not None:  # an outer middleware is already tracking this call
+        yield holder
+        return
+    holder = {}
+    token = _account_used.set(holder)
+    try:
+        yield holder
+    finally:
+        _account_used.reset(token)
 
 
 def _service_types(service: str) -> tuple[str, ...]:
@@ -49,8 +101,8 @@ def _service_types(service: str) -> tuple[str, ...]:
 
 def _needs_reauth_error(service: str, name: str) -> ValueError:
     return ValueError(
-        f"The {service} account '{name}' needs to be reconnected: the provider no longer "
-        f"accepts its saved login. The user can reconnect it in the ZuiMCP dashboard."
+        f"The {service} account '{name}' needs to be reconnected: the provider refused its saved login. "
+        f"The user can update the login (or reconnect) in the ZuiMCP dashboard, then retry."
     )
 
 
@@ -63,7 +115,7 @@ def resolve_account(user_id: str, service: str, account: str | None, capability:
                 "COALESCE(p.allowed, false) AS allowed "
                 "FROM connections c "
                 "LEFT JOIN permissions p ON p.connection_id = c.id AND p.capability = :capability "
-                "WHERE c.user_id = :user_id AND c.status IN ('active', 'needs_reauth') "
+                "WHERE c.user_id = :user_id AND c.status IN ('active', 'needs_reauth', 'disabled') "
                 "AND c.service_type = ANY(:service_types) "
                 "ORDER BY c.id"
             ),
@@ -76,14 +128,28 @@ def resolve_account(user_id: str, service: str, account: str | None, capability:
     finally:
         db.close()
 
-    if not rows:
-        raise ValueError(f"No active {service} accounts are connected for this user")
+    paused = [r for r in rows if r.status == "disabled"]
+    all_rows, rows = rows, [r for r in rows if r.status != "disabled"]
+
+    if not account and not rows:
+        if paused:
+            raise ValueError(
+                f"All of this user's {service} accounts are paused. The user can resume one "
+                f"in the ZuiMCP dashboard, then retry."
+            )
+        raise ValueError(
+            f"No active {service} accounts are connected for this user. They can connect "
+            f"one in the ZuiMCP dashboard and then retry; no need to reconnect this client."
+        )
 
     if account:
         wanted = account.strip()
-        matches = [r for r in rows if str(r.id) == wanted]
+        matches = [r for r in all_rows if str(r.id) == wanted]
         if not matches:
-            matches = [r for r in rows if r.display_name.casefold() == wanted.casefold()]
+            matches = [r for r in all_rows if r.display_name.casefold() == wanted.casefold()]
+        if len(matches) > 1:
+            # A paused account doesn't make an active one's name ambiguous.
+            matches = [r for r in matches if r.status != "disabled"] or matches
         if not matches:
             raise ValueError(
                 f"No active {service} account matches '{account}'. "
@@ -101,7 +167,10 @@ def resolve_account(user_id: str, service: str, account: str | None, capability:
     else:
         permitted = [r for r in rows if r.allowed]
         if not permitted:
-            raise ValueError(f"None of this user's {service} accounts allow '{capability}'")
+            raise ValueError(
+                f"None of this user's {service} accounts allow '{capability}'. "
+                f"The user can grant it in the ZuiMCP dashboard, then retry."
+            )
         options = "\n".join(
             f"  - {r.display_name} (account: {r.id})"
             + (" — needs reconnecting, can't be used now" if r.status == "needs_reauth" else "")
@@ -113,13 +182,29 @@ def resolve_account(user_id: str, service: str, account: str | None, capability:
             f"with one of these (accounts that allow '{capability}'):\n{options}"
         )
 
+    # Recorded before the checks below, so a refused call is logged with its account.
+    used = _account_used.get()
+    if used is not None:
+        used.update(
+            id=row.id,
+            name=row.display_name,
+            service_type=row.service_type,
+            target=account_target(row.service_type, row.credentials_encrypted),
+        )
+
+    if row.status == "disabled":
+        raise ValueError(
+            f"The {service} account '{row.display_name}' is paused by the user. They can "
+            f"resume it in the ZuiMCP dashboard, then retry."
+        )
+
     if row.status == "needs_reauth":
         raise _needs_reauth_error(service, row.display_name)
 
     if not row.allowed:
         raise ValueError(
             f"The account '{row.display_name}' does not allow '{capability}'. "
-            f"The user can grant it in the ZuiMCP dashboard."
+            f"The user can grant it in the ZuiMCP dashboard, then retry."
         )
 
     return Account(

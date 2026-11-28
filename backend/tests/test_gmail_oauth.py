@@ -121,7 +121,7 @@ def test_callback_creates_connection_with_nothing_granted(db, google_ok):
     started, res = connect(client)
 
     assert res.status_code == 303
-    assert res.headers["location"].startswith("/dashboard/connections?")
+    assert res.headers["location"].startswith("/dashboard/connectors?")
     [conn] = gmail_rows(db, user)
     assert query_of(res) == {"gmail_connected": str(conn.id)}
     assert "gmail.com" not in res.headers["location"]  # no address in the URL

@@ -5,11 +5,17 @@ from fastmcp import Context, FastMCP
 from fastmcp.server.auth import RemoteAuthProvider
 from fastmcp.server.auth.providers.jwt import JWTVerifier
 from fastmcp.server.middleware.rate_limiting import SlidingWindowRateLimitingMiddleware
+from mcp.types import Icon, ToolAnnotations
 
 from core.accounts import list_user_accounts
 from core.config import config
 from core.mcp_auth import get_user_id
-from core.middleware import TOOL_CAPABILITY, AuditLoggingMiddleware, ToolFilterMiddleware
+from core.middleware import (
+    TOOL_CAPABILITY,
+    AuditLoggingMiddleware,
+    LoginRefusedMiddleware,
+    ToolFilterMiddleware,
+)
 
 MCP_PATH = "/mcp"
 MCP_RESOURCE_URL = config.get("MCP_RESOURCE_URL", "http://localhost:8000")
@@ -35,14 +41,26 @@ auth = RemoteAuthProvider(
     base_url=MCP_RESOURCE_URL,
 )
 
+# The dashboard's origin (Better Auth's issuer is <app origin>/auth). It serves
+# the logo, which MCP clients may show next to the connector (serverInfo.icons).
+APP_URL = BETTER_AUTH_ISSUER.removesuffix("/auth")
+
 mcp = FastMCP(
     "ZuiMCP",
     auth=auth,
+    website_url=APP_URL,
+    icons=[
+        Icon(src=f"{APP_URL}/icon-512.png", mimeType="image/png", sizes=["512x512"]),
+        Icon(src=f"{APP_URL}/favicon-32.png", mimeType="image/png", sizes=["32x32"]),
+    ],
     instructions=(
         "Tools are named <service>_<action> (email_send, ...). A user can connect "
         "several accounts per service: call list_accounts to see them. When a user "
         "has more than one account for a service, pass `account` on every call — "
-        "it is never guessed, so ask the user if it isn't clear which one they mean."
+        "it is never guessed, so ask the user if it isn't clear which one they mean. "
+        "list_accounts also shows what each account allows. A tool the user hasn't "
+        "allowed on any account is refused; tell the user they can turn it on in the "
+        "ZuiMCP dashboard, then retry — no need to reconnect."
     ),
 )
 
@@ -56,20 +74,44 @@ mcp.add_middleware(
         get_client_id=lambda ctx: get_user_id(ctx.fastmcp_context) or "anonymous",
     )
 )
-mcp.add_middleware(ToolFilterMiddleware())
+# Inside the audit log, so the log records the clear message it raises.
+mcp.add_middleware(LoginRefusedMiddleware())
+if config.get("MCP_HIDE_UNGRANTED_TOOLS", False):
+    mcp.add_middleware(ToolFilterMiddleware())
+
+
+# MCP tool hints, by capability. Clients use them to group tools (Claude shows
+# "Read-only" and "Write/delete" sections, each with its own allow/ask setting)
+# and to decide when to ask the user first. Hints only: permissions are still
+# enforced by resolve_account(). destructive = can't be undone or overwrites data.
+_READ_ONLY = ToolAnnotations(read_only_hint=True, open_world_hint=True)
+CAPABILITY_HINTS: dict[str, ToolAnnotations] = {
+    "email.read": _READ_ONLY,
+    "email.search": _READ_ONLY,
+    "email.draft": ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=True),
+    "email.mark_seen": ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=True),
+    "email.send": ToolAnnotations(read_only_hint=False, destructive_hint=True, idempotent_hint=False, open_world_hint=True),
+    "odoo.read": _READ_ONLY,
+    "odoo.create": ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=True),
+    "odoo.write": ToolAnnotations(read_only_hint=False, destructive_hint=True, idempotent_hint=True, open_world_hint=True),
+    "odoo.delete": ToolAnnotations(read_only_hint=False, destructive_hint=True, idempotent_hint=True, open_world_hint=True),
+}
 
 
 def service_tool(capability: str | None):
     """Registers an MCP tool together with the capability it needs.
 
-    The capability drives the per-user tool list and the audit log. The tool
-    itself must still pass the same capability to resolve_account(), which is
-    what actually enforces it.
+    The capability drives the audit log and the tool's hints (CAPABILITY_HINTS).
+    The tool itself must still pass the same capability to resolve_account(),
+    which is what actually enforces it.
     """
+    if capability is not None and capability not in CAPABILITY_HINTS:
+        raise ValueError(f"No tool hints defined for capability '{capability}'")
 
     def decorator(fn):
         TOOL_CAPABILITY[fn.__name__] = capability
-        return mcp.tool()(fn)
+        hints = CAPABILITY_HINTS[capability] if capability else ToolAnnotations(read_only_hint=True, open_world_hint=False)
+        return mcp.tool(annotations=hints)(fn)
 
     return decorator
 

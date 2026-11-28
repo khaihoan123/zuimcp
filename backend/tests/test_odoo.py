@@ -649,3 +649,21 @@ def test_connect_endpoint_requires_https(monkeypatch, no_dns):
     assert res.status_code == 400
     assert "https" in res.json()["detail"]
     assert fake.requests == []
+
+
+def test_new_api_key_fixes_an_account_whose_login_was_refused(db, monkeypatch, no_dns):
+    fake_odoo(monkeypatch, 19)
+    alice = make_user("alice")
+    cid = logged_in(alice).post("/api/connections/odoo", json={**NEW_ODOO, "api_key": KEY}).json()["id"]
+    db.get(Connection, cid).status = "needs_reauth"
+    db.commit()
+
+    edit = {"url": URL, "database": DB, "login": LOGIN}
+    assert logged_in(alice).put(f"/api/connections/{cid}/odoo", json={**edit, "api_key": "nope"}).status_code == 400
+    res = logged_in(alice).put(f"/api/connections/{cid}/odoo", json=edit)  # blank key: keep the saved one
+
+    assert res.status_code == 200
+    assert res.json()["status"] == "active"
+    assert res.json()["settings"] == {"url": URL, "database": DB, "login": LOGIN}
+    db.expire_all()
+    assert json.loads(decrypt_credentials(db.get(Connection, cid).credentials_encrypted))["api_key"] == KEY

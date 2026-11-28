@@ -27,6 +27,7 @@ from email.message import Message
 import httpx
 from imap_tools import MailMessage
 
+from core.audit import mark_login_refused
 from core.db import SessionLocal
 from services.email.providers.google_oauth import (
     GoogleOAuthError,
@@ -80,14 +81,7 @@ def save_credentials(connection_id: int, credentials: dict) -> None:
 
 
 def mark_needs_reauth(connection_id: int) -> None:
-    db = SessionLocal()
-    try:
-        connection = db.get(Connection, connection_id)
-        if connection is not None:
-            connection.status = "needs_reauth"
-            db.commit()
-    finally:
-        db.close()
+    mark_login_refused(connection_id, "Google no longer accepts its saved login")
 
 
 def _b64url_decode(data: str) -> bytes:

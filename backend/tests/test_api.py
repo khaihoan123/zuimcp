@@ -269,6 +269,25 @@ def test_audit_log_shows_only_own_entries(db):
     assert [e["tool_name"] for e in res.json()] == ["email_list"]
 
 
+def test_audit_log_filters_by_account_and_never_leaks_other_users(db):
+    alice, bob = make_user("alice"), make_user("bob")
+    work, home = make_connection(alice, "Work"), make_connection(alice, "Home")
+    bobs = make_connection(bob, "Bob")
+    db.add_all(
+        [
+            AuditLog(user_id=alice, tool_name="email_list", status="success", connection_id=work),
+            AuditLog(user_id=alice, tool_name="email_send", status="success", connection_id=home),
+            AuditLog(user_id=bob, tool_name="email_read", status="success", connection_id=bobs),
+        ]
+    )
+    db.commit()
+
+    assert [e["tool_name"] for e in logged_in(alice).get(f"/api/audit-log?connection_id={work}").json()] == [
+        "email_list"
+    ]
+    assert logged_in(alice).get(f"/api/audit-log?connection_id={bobs}").json() == []
+
+
 @pytest.mark.parametrize("limit, expected", [(-5, 1), (0, 1), (2, 2), (1000, 3)])
 def test_audit_log_limit_is_clamped(db, limit, expected):
     alice = make_user("alice")
@@ -299,3 +318,76 @@ def test_list_shows_which_account_without_secrets():
     body = res.text
     for secret in ("secret", "api-key-123", "api_key", "password", "credentials"):
         assert secret not in body
+
+
+# --- editing a saved login -------------------------------------------------
+
+EDIT_IMAP = {"host": "imap.example.com", "port": 993, "smtp_host": "smtp.example.com", "smtp_port": 587}
+
+
+def stored_creds(db, connection_id):
+    db.expire_all()
+    return json.loads(decrypt_credentials(db.get(Connection, connection_id).credentials_encrypted))
+
+
+def test_list_includes_settings_for_the_edit_form_without_secrets(db):
+    alice = make_user("alice")
+    make_connection(alice)
+
+    item = logged_in(alice).get("/api/connections").json()[0]
+
+    assert item["settings"] == {"host": "imap.example.com", "port": 993, "email": "work@example.com",
+                                "smtp_host": "imap.example.com", "smtp_port": 587}
+    assert "secret" not in json.dumps(item)
+
+
+def test_new_password_fixes_an_account_whose_login_was_refused(db, fake_mail_servers):
+    alice = make_user("alice")
+    cid = make_connection(alice, status="needs_reauth")
+
+    res = logged_in(alice).put(f"/api/connections/{cid}/imap", json={**EDIT_IMAP, "password": "new-pass"})
+
+    assert res.status_code == 200
+    assert res.json()["status"] == "active"
+    creds = stored_creds(db, cid)
+    assert creds["password"] == "new-pass" and creds["smtp_host"] == "smtp.example.com"
+    assert creds["email"] == "work@example.com"
+
+
+def test_blank_password_keeps_the_saved_one_and_disabled_stays_disabled(db, fake_mail_servers):
+    alice = make_user("alice")
+    cid = make_connection(alice, status="disabled")
+
+    res = logged_in(alice).put(f"/api/connections/{cid}/imap", json={**EDIT_IMAP, "port": 1993})
+
+    assert res.status_code == 200
+    assert res.json()["status"] == "disabled"
+    assert stored_creds(db, cid)["password"] == "secret"
+    assert stored_creds(db, cid)["port"] == 1993
+
+
+def test_refused_new_login_is_not_saved(db, monkeypatch):
+    class Refused(FakeMailBox):
+        def login(self, *args):
+            raise connections.MailboxLoginError("NO", "OK")
+
+    monkeypatch.setattr(connections, "ensure_public_host", lambda host, port: None)
+    monkeypatch.setattr(connections, "PublicMailBox", Refused)
+    alice = make_user("alice")
+    cid = make_connection(alice, status="needs_reauth")
+
+    res = logged_in(alice).put(f"/api/connections/{cid}/imap", json={**EDIT_IMAP, "password": "wrong"})
+
+    assert res.status_code == 400
+    assert stored_creds(db, cid)["password"] == "secret"
+    assert db.get(Connection, cid).status == "needs_reauth"
+
+
+def test_cannot_edit_another_users_account_or_the_wrong_type(db, fake_mail_servers):
+    alice, bob = make_user("alice"), make_user("bob")
+    cid = make_connection(alice)
+
+    assert logged_in(bob).put(f"/api/connections/{cid}/imap", json=EDIT_IMAP).status_code == 404
+    res = logged_in(alice).put(f"/api/connections/{cid}/odoo",
+                               json={"url": "https://x.example.com", "database": "d", "login": "l"})
+    assert res.status_code == 400

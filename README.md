@@ -28,8 +28,10 @@ ZuiMCP sits in between:
 - **The agent never guesses the account.** With several mailboxes or databases,
   every call must name the account. A call without one fails and lists the choices,
   so an email can't go out from the wrong address.
-- **Agents only see what they may use.** Tools no account allows are hidden from the
-  agent's tool list, and they're refused anyway if called.
+- **Changes apply instantly.** Turn an action on or off, or connect a new account, and
+  the agent's next call uses it. No reconnecting the AI client: every call is checked
+  against your current permissions, and a refused call tells the agent where you can
+  allow it.
 - **One endpoint for everything.** Add `/mcp` once; email and Odoo tools appear under it.
 
 Every call is logged. Here, an agent tried to send from an account that may only draft,

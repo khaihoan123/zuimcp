@@ -116,3 +116,103 @@ def test_disabled_account_grants_nothing(monkeypatch):
     make_connection(user, granted=("email.send",), status="disabled")
 
     assert "email_send" not in visible_tools(user, monkeypatch)
+
+
+def test_every_tool_is_listed_by_default():
+    # MCP clients keep the tool list from when they connected, so hiding tools
+    # would make a permission granted later invisible until the user reconnects.
+    from core.mcp_server import mcp
+
+    assert not any(isinstance(m, ToolFilterMiddleware) for m in mcp.middleware)
+
+
+def test_tools_carry_read_only_and_destructive_hints():
+    # Claude groups a connector's tools by these hints ("Read-only" vs
+    # "Write/delete"), each group with its own allow/ask setting.
+    import services.odoo.service  # noqa: F401
+    from core.mcp_server import mcp
+
+    tools = {t.name: t for t in asyncio.run(mcp.list_tools(run_middleware=False))}
+    assert len(tools) == len(middleware.TOOL_CAPABILITY)
+    for name, tool in tools.items():
+        assert tool.annotations is not None, name
+    for name in ("list_accounts", "email_read", "email_search", "odoo_search", "odoo_read_group"):
+        assert tools[name].annotations.read_only_hint is True, name
+    for name in ("email_send", "odoo_update", "odoo_delete"):
+        assert tools[name].annotations.read_only_hint is False, name
+        assert tools[name].annotations.destructive_hint is True, name
+    for name in ("email_draft", "email_mark_seen", "odoo_create"):
+        assert tools[name].annotations.destructive_hint is False, name
+
+
+def run_refused_call(error, monkeypatch, user_id, account="Work"):
+    from core.accounts import resolve_account
+    from core.middleware import LoginRefusedMiddleware
+
+    async def tool(context):
+        resolve_account(user_id, "email", account, "email.read")
+        raise error
+
+    context = SimpleNamespace(message=SimpleNamespace(name="email_read"), fastmcp_context=None)
+    return asyncio.run(LoginRefusedMiddleware().on_call_tool(context, tool))
+
+
+@pytest.mark.parametrize("error", [
+    __import__("smtplib").SMTPAuthenticationError(535, b"bad credentials"),
+    RuntimeError("wrapped"),
+])
+def test_refused_login_flags_the_account(db, monkeypatch, error):
+    import smtplib
+    user = make_user("alice")
+    cid = make_connection(user, "Work", granted=("email.read",))
+    if isinstance(error, RuntimeError):  # FastMCP may wrap the provider's error
+        error.__cause__ = smtplib.SMTPAuthenticationError(535, b"bad")
+
+    with pytest.raises(ValueError, match="update its login in the ZuiMCP dashboard"):
+        run_refused_call(error, monkeypatch, user)
+
+    from models import Connection
+    db.expire_all()
+    assert db.get(Connection, cid).status == "needs_reauth"
+
+
+def test_other_errors_leave_the_account_active(db, monkeypatch):
+    user = make_user("alice")
+    cid = make_connection(user, "Work", granted=("email.read",))
+
+    with pytest.raises(TimeoutError):
+        run_refused_call(TimeoutError("server slow"), monkeypatch, user)
+
+    from models import Connection
+    db.expire_all()
+    assert db.get(Connection, cid).status == "active"
+
+
+def test_log_records_the_account_used_and_a_clean_error(db, monkeypatch):
+    from core.accounts import resolve_account
+
+    user = make_user("alice")
+    cid = make_connection(user, "Work", granted=("email.read",))
+
+    async def tool(context):
+        resolve_account(user, "email", "Work", "email.read")
+        raise ValueError("Error calling tool 'email_read': mailbox busy")
+
+    with pytest.raises(ValueError):
+        call_tool("email_read", tool, user_id=user, monkeypatch=monkeypatch)
+
+    entry = db.query(AuditLog).one()
+    assert (entry.connection_id, entry.account_name, entry.service_type) == (cid, "Work", "imap")
+    assert entry.detail == "mailbox busy"
+
+
+def test_log_has_no_account_when_none_was_resolved(db, monkeypatch):
+    make_user("alice")
+
+    async def ok(context):
+        return "fine"
+
+    call_tool("list_accounts", ok, monkeypatch=monkeypatch)
+
+    entry = db.query(AuditLog).one()
+    assert (entry.connection_id, entry.account_name, entry.service_type) == (None, None, None)

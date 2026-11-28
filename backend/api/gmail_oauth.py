@@ -35,6 +35,7 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
 from api.connections import DEFAULT_IMAP_CAPABILITIES, mailboxes_with_address, same_mailbox
+from core.audit import record_account_event
 from core.auth import get_current_user_id
 from core.db import get_db
 from services.email.providers.google_oauth import (
@@ -56,7 +57,7 @@ router = APIRouter(prefix=PREFIX, tags=["connections"])
 
 STATE_COOKIE = "zui_gmail_oauth"
 STATE_TTL = 600  # seconds the user has to finish Google's consent screen
-DASHBOARD_PATH = "/dashboard/connections"
+DASHBOARD_PATH = "/dashboard/connectors"
 GMAIL_PROFILE_URL = "https://gmail.googleapis.com/gmail/v1/users/me/profile"
 
 # Same capabilities as an IMAP mailbox, so the tools work identically.
@@ -107,6 +108,7 @@ def _renew_login(db: Session, connection: Connection, credentials: dict) -> Redi
         return _back_to_dashboard(gmail_error="no_refresh_token")
     connection.credentials_encrypted = encrypt_credentials(json.dumps(credentials))
     connection.status = "active"
+    record_account_event(db, connection, "account.login_updated", "Reconnected with Google")
     db.commit()
     return _back_to_dashboard(gmail_connected=str(connection.id), reconnected="1")
 
@@ -273,6 +275,7 @@ def callback(
     db.flush()  # assigns connection.id before we create Permission rows
     for capability in GMAIL_CAPABILITIES:
         db.add(Permission(connection_id=connection.id, capability=capability, allowed=False))
+    record_account_event(db, connection, "account.connected")
     db.commit()
 
     result = {"gmail_connected": str(connection.id)}
